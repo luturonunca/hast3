@@ -675,12 +675,12 @@ def select(config_file):
         #if((d[candidates[0][i],6]<rbuffer)or(d[candidates[0][i],6]>1.0-2*rbuffer)):
         #    flag[i] = 4
         if((d[candidates[0][i],4]<boundary_min)or(d[candidates[0][i],4]>boundary_max)):
-            print("| candidate {0} x = {1} outside [{2}, {3}]".format(
-                i, d[candidates[0][i],4], boundary_min, boundary_max))
+            #print("| candidate {0} x = {1} outside [{2}, {3}]".format(
+            #    i, d[candidates[0][i],4], boundary_min, boundary_max))
             flag[i] = 4
         if((d[candidates[0][i],5]<boundary_min)or(d[candidates[0][i],5]>boundary_max)):
-            print("| candidate {0} y = {1} outside [{2}, {3}]".format(
-                i, d[candidates[0][i],5], boundary_min, boundary_max))
+            #print("| candidate {0} y = {1} outside [{2}, {3}]".format(
+            #    i, d[candidates[0][i],5], boundary_min, boundary_max))
             flag[i] = 4
         if((d[candidates[0][i],6]<boundary_min)or(d[candidates[0][i],6]>boundary_max)):
             # print("| candidate {0} z = {1} outside [{2}, {3}]".format(
