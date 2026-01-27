@@ -7,3 +7,14 @@ Download the code by cloning the git repository using
 ```
 $ git clone https://bitbucket.org/vperret/hast
 ```
+
+## Quick start (selection)
+1) Edit the example config:
+   - `examples/selection.conf`
+2) Run the selection script:
+```
+python examples/selection.py examples/selection.conf
+```
+
+This reads RAMSES outputs and clump finder files to select halos and trace
+their Lagrangian regions. See `examples/selection.conf` for required fields.
