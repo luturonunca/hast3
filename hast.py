@@ -29,6 +29,31 @@ def _load_sim(path):
         pass
     return sim
 
+def _clump_header_format(path):
+    try:
+        with open(path, 'r') as f:
+            header = f.readline().strip()
+        header = header.lstrip('#').strip().lower()
+        if "peak_x" in header and "mass_cl" in header:
+            return "new"
+    except Exception:
+        pass
+    return "legacy"
+
+def _normalize_clump_columns(data, fmt):
+    if fmt != "new":
+        return data
+    if data.shape[1] < 12:
+        return data
+    data = data.copy()
+    # New format has parent column and peak_* positions; map to legacy slots.
+    data[:,3] = data[:,4]      # ncell
+    data[:,4:7] = data[:,5:8]  # x, y, z
+    data[:,8] = data[:,9]      # rho_max (use rho+)
+    data[:,9] = data[:,10]     # rho_ave
+    data[:,10] = data[:,11]    # mass_cl
+    return data
+
 mpl_major = int(matplotlib.__version__[0])
 mpl_minor = int(matplotlib.__version__[2])
 flatui = ["#9b59b6", "#3498db", "#95a5a6", "#e74c3c", "#34495e", "#2ecc71"]
@@ -275,6 +300,7 @@ def halo_list(output,quiet=False,clump_mass_unit='fraction'):
         print('| Reading RAMSES clump finder files')
         print('| ------------------------------------------------------------')
         print('| nfiles        = {0}'.format(len(list)))
+    fmt = _clump_header_format(list[0]) if len(list) > 0 else "legacy"
     i=0
     for file in list:
         data = np.loadtxt(file,skiprows=1,dtype=None)
@@ -285,6 +311,7 @@ def halo_list(output,quiet=False,clump_mass_unit='fraction'):
         else:
             data_all = data
         i=i+1
+    data_all = _normalize_clump_columns(data_all, fmt)
     data_sorted = data_all[data_all[:,10].argsort()]
     d = _load_sim(output)
     # Convert clump positions from code units (0..1) to kpc when needed.
@@ -403,6 +430,7 @@ def halo_list_pynbody(sim, halo_finder, quiet=False):
 def __halo_list_tracking(output,conf):
 
     list = glob.glob(output+'/clump_?????.txt?????')
+    fmt = _clump_header_format(list[0]) if len(list) > 0 else "legacy"
     i=0
     for file in list:
                 data = np.loadtxt(file,skiprows=1,dtype=None)
@@ -413,6 +441,7 @@ def __halo_list_tracking(output,conf):
                 else:
                         data_all = data
                 i=i+1
+    data_all = _normalize_clump_columns(data_all, fmt)
     if(conf.rank_function == 'mass'):
             c = data_all[:,10]
     elif(conf.rank_function == 'ncell'):
