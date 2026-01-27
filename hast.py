@@ -545,6 +545,20 @@ def select(config_file):
         return
 
     flag = np.zeros(nc)
+    boundary_min = p.boundary_min
+    boundary_max = p.boundary_max
+    if np.max(d[:,4:7]) > 1.0:
+        boxsize = sim_zlast.properties.get('boxsize', None)
+        if boxsize is not None:
+            try:
+                if hasattr(boxsize, "in_units"):
+                    boxsize_val = float(boxsize.in_units('kpc'))
+                else:
+                    boxsize_val = float(boxsize)
+                boundary_min = boundary_min * boxsize_val
+                boundary_max = boundary_max * boxsize_val
+            except Exception:
+                pass
 
     for i in range(nc):
         # Check if neighbors number exceeds cireterion
@@ -567,13 +581,13 @@ def select(config_file):
         #    flag[i] = 4
         #if((d[candidates[0][i],6]<rbuffer)or(d[candidates[0][i],6]>1.0-2*rbuffer)):
         #    flag[i] = 4
-        if((d[candidates[0][i],4]<p.boundary_min)or(d[candidates[0][i],4]>p.boundary_max)):
+        if((d[candidates[0][i],4]<boundary_min)or(d[candidates[0][i],4]>boundary_max)):
                         #print i," x = ",(d[candidates[0][i],4])
                  flag[i] = 4
-        if((d[candidates[0][i],5]<p.boundary_min)or(d[candidates[0][i],5]>p.boundary_max)):
+        if((d[candidates[0][i],5]<boundary_min)or(d[candidates[0][i],5]>boundary_max)):
                         #print i, "y = ",(d[candidates[0][i],5])
             flag[i] = 4
-        if((d[candidates[0][i],6]<p.boundary_min)or(d[candidates[0][i],6]>p.boundary_max)):
+        if((d[candidates[0][i],6]<boundary_min)or(d[candidates[0][i],6]>boundary_max)):
                         #print i, "z = ",(d[candidates[0][i],6])
             flag[i] = 4
         if(p.rsearch>0.0):
