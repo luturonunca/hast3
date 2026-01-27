@@ -497,7 +497,7 @@ def plot_candidates(data,sim,center=[0.,0.,0.]):
         b = ax[i].get_position()
         data[:,4:7] -= center
         h = ax[i].scatter(data[:,dproj[i][0]],data[:,dproj[i][1]],s=50,c=cp2,alpha=0.5)
-        ax[i].set(adjustable='box-forced', aspect='equal')
+        ax[i].set(adjustable='box', aspect='equal')
         extent_max = hist_range[0][1]
         tv = ax[i].imshow(
             np.log10(im), cmap='bone_r', interpolation='quadric',
