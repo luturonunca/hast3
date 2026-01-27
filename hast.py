@@ -21,6 +21,14 @@ from astropy.cosmology import Planck15, z_at_value
 
 warnings.filterwarnings("ignore")
 
+def _load_sim(path):
+    sim = pynbody.load(path)
+    try:
+        sim.physical_units()
+    except Exception:
+        pass
+    return sim
+
 mpl_major = int(matplotlib.__version__[0])
 mpl_minor = int(matplotlib.__version__[2])
 flatui = ["#9b59b6", "#3498db", "#95a5a6", "#e74c3c", "#34495e", "#2ecc71"]
@@ -270,7 +278,7 @@ def halo_list(output,quiet=False,clump_mass_unit='fraction'):
             data_all = data
         i=i+1
     data_sorted = data_all[data_all[:,10].argsort()]
-    d = pynbody.load(output)
+    d = _load_sim(output)
     mass = d.d['mass']
     if hasattr(mass, "in_units"):
         mass_msol = mass.in_units("Msol")
@@ -404,7 +412,7 @@ def __halo_list_tracking(output,conf):
     sorted = np.argsort(c)
     data_sorted = data_all[sorted]
     data_sorted = data_sorted[::-1]
-    d = pynbody.load(output)
+    d = _load_sim(output)
     return data_sorted
 
 
@@ -472,13 +480,13 @@ def select(config_file):
         print('[Error] {0} file specified cannot be read'.format(config_file))
         sys.exit()
     try:
-        sim_zinit = pynbody.load(p.output_zinit)
+        sim_zinit = _load_sim(p.output_zinit)
     except IOError:
         print('[Error] {0} file specified cannot be read'.format(p.output_zinit))
         sys.exit()
 
     try:
-        sim_zlast = pynbody.load(p.output_zlast)
+        sim_zlast = _load_sim(p.output_zlast)
     except IOError:
         print('[Error] {0} file specified cannot be read'.format(p.output_zlast))
         sys.exit()
@@ -722,7 +730,7 @@ def decontaminate(config_file):
     print('| ------------------------------------------------------------')
     try:
         print(list[0])
-        sim_zinit = pynbody.load(list[0])
+        sim_zinit = _load_sim(list[0])
         sim_zinit = sim_zinit[np.argsort(sim_zinit['iord'])]
     except IOError:
         print('[Error] {0} file specified cannot be read'.format(p.output_zinit))
@@ -766,7 +774,7 @@ def decontaminate(config_file):
                 # Find halos matching coordinate filter around previous halo
                 halo_candidates = tree_halo.query_radius([x[k],y[k],z[k]],p.rvir_search*r200_start)[0]
                 # Load current snapshot
-                sim_curr = pynbody.load(list[j-1])
+                sim_curr = _load_sim(list[j-1])
                 sim_curr = sim_curr[np.argsort(sim_curr['iord'])]
                 aexp_curr = float(sim_curr.properties['a'])
                 to_msol = float(np.sum(sim_curr.d['mass'].in_units('Msol')))
@@ -826,7 +834,7 @@ def decontaminate(config_file):
                 if((p.halo_coords[0]>0.) & (p.halo_coords[1]>0.) & (p.halo_coords[2]>0.)):
                     print('| Relative distance         = {0:.2e} cu'.format(np.min(dist_halo)))
                 # Loading first snapshot
-                sim_curr = pynbody.load(list[j-1])
+                sim_curr = _load_sim(list[j-1])
                 aexp_curr = float(sim_curr.properties['a'])
                 # Computing virial radius
                 r200_start = pynbody.analysis.halo.virial_radius(sim_curr.d,cen=hl[id,4:7],r_max=0.5)
@@ -1026,7 +1034,7 @@ def decontaminate(config_file):
         pyplot.close(fig)
 
         # Reload last output
-        sim_zlast = pynbody.load(list[-1])
+        sim_zlast = _load_sim(list[-1])
         sim_zlast = sim_zlast[np.argsort(sim_zlast['iord'])]
         hl = __halo_list_tracking(list[-1],p)
         # Find zoomed particles
@@ -1114,7 +1122,7 @@ def analyse(config_file):
         sys.exit()
 
     try:
-        sim = pynbody.load(p.output)
+        sim = _load_sim(p.output)
     except IOError:
         print('[Error] {0} file specified cannot be read'.format(p.output))
         sys.exit()
@@ -1374,7 +1382,7 @@ def track(config_file):
                 halo_candidates = tree_halo.query_radius([x[k],y[k],z[k]],p.rvir_search*r200_start)[0]
 
                 # Load current snapshot
-                sim_curr = pynbody.load(list[j-1])
+                sim_curr = _load_sim(list[j-1])
                 aexp_curr = float(sim_curr.properties['a'])
                 to_msol = float(np.sum(sim_curr.d['mass'].in_units('Msol')))
                 mass_cutoff = max(p.halo_cutoff/to_msol,p.halo_massfrac*mass_curr)
@@ -1426,7 +1434,7 @@ def track(config_file):
                 print('| Closest halo coordinates = [{0:.4f},{1:.4f},{2:.4f}] cu'.format(hl[id,4],hl[id,5],hl[id,6]))
                 print('| Relative distance        = {0:.2e} cu'.format(np.min(dist_halo)))
                 # Loading first snapshot
-                sim_curr = pynbody.load(list[j-1])
+                sim_curr = _load_sim(list[j-1])
                 aexp_curr = float(sim_curr.properties['a'])
                 # Computing virial radius
                 r200_start = pynbody.analysis.halo.virial_radius(sim_curr.d,cen=hl[id,4:7],r_max=0.5)
