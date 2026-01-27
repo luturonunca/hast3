@@ -742,11 +742,15 @@ def select(config_file):
             npart = len(region_zinit)
             print('| {0:3d} | m_candidate={1:.2e} Msol | {2} neighbors | m_region={3:.2e} Msol | npart={4} '.format(i+1,mass_candidate,len(neighbors[wh1[0][i]]),mass_region,npart))
             safety = False
-            if((np.max(sim_zinit['x'][region_zinit])-np.min(sim_zinit['x'][region_zinit]))>0.5):
+            try:
+                box_kpc = float(sim_zinit.properties['boxsize'].in_units('kpc'))
+            except Exception:
+                box_kpc = 1.0
+            if((np.max(sim_zinit['x'][region_zinit])-np.min(sim_zinit['x'][region_zinit]))/box_kpc>0.5):
                 safety = True
-            if((np.max(sim_zinit['y'][region_zinit])-np.min(sim_zinit['y'][region_zinit]))>0.5):
+            if((np.max(sim_zinit['y'][region_zinit])-np.min(sim_zinit['y'][region_zinit]))/box_kpc>0.5):
                 safety = True
-            if((np.max(sim_zinit['z'][region_zinit])-np.min(sim_zinit['z'][region_zinit]))>0.5):
+            if((np.max(sim_zinit['z'][region_zinit])-np.min(sim_zinit['z'][region_zinit]))/box_kpc>0.5):
                 safety = True
             if(safety):
                 print('|     | --- Traceback region lies in boundaries')
