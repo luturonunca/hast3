@@ -287,6 +287,14 @@ def halo_list(output,quiet=False,clump_mass_unit='fraction'):
         i=i+1
     data_sorted = data_all[data_all[:,10].argsort()]
     d = _load_sim(output)
+    # Convert clump positions from code units (0..1) to kpc when needed.
+    try:
+        boxsize_kpc = float(d.properties['boxsize'].in_units('kpc'))
+    except Exception:
+        boxsize_kpc = None
+    if boxsize_kpc is not None:
+        if np.max(data_sorted[:,4:7]) <= 1.0:
+            data_sorted[:,4:7] *= boxsize_kpc
     mass = d.d['mass']
     if hasattr(mass, "in_units"):
         mass_msol = mass.in_units("Msol")
@@ -421,6 +429,14 @@ def __halo_list_tracking(output,conf):
     data_sorted = data_all[sorted]
     data_sorted = data_sorted[::-1]
     d = _load_sim(output)
+    # Convert clump positions from code units (0..1) to kpc when needed.
+    try:
+        boxsize_kpc = float(d.properties['boxsize'].in_units('kpc'))
+    except Exception:
+        boxsize_kpc = None
+    if boxsize_kpc is not None:
+        if np.max(data_sorted[:,4:7]) <= 1.0:
+            data_sorted[:,4:7] *= boxsize_kpc
     return data_sorted
 
 
@@ -438,15 +454,27 @@ def plot_candidates(data,sim,center=[0.,0.,0.]):
         y=proj[i][1]
         ax[i].set_xlabel(x)
         ax[i].set_ylabel(y)
-        im,xedges,yedges = np.histogram2d(sim.d[x],sim.d[y],weights=sim.d['mass'],bins=512,range=[[0.,1.],[0.,1.]])
+        if np.max(sim.d[x]) > 1.0 or np.max(sim.d[y]) > 1.0:
+            try:
+                boxsize = float(sim.properties['boxsize'].in_units('kpc'))
+            except Exception:
+                boxsize = float(np.max([np.max(sim.d[x]), np.max(sim.d[y])]))
+            hist_range = [[0.0, boxsize], [0.0, boxsize]]
+        else:
+            hist_range = [[0.0, 1.0], [0.0, 1.0]]
+        im,xedges,yedges = np.histogram2d(
+            sim.d[x], sim.d[y], weights=sim.d['mass'], bins=512, range=hist_range)
         im = np.rot90(im)
         b = ax[i].get_position()
         data[:,4:7] -= center
         h = ax[i].scatter(data[:,dproj[i][0]],data[:,dproj[i][1]],s=50,c=cp2,alpha=0.5)
         ax[i].set(adjustable='box-forced', aspect='equal')
-        tv = ax[i].imshow(np.log10(im),cmap='bone_r',interpolation='quadric',aspect='equal',extent=[0.,1.,0.,1.])
-        ax[i].set_xlim([0.-center[0],1.-center[0]])
-        ax[i].set_ylim([0.-center[1],1.-center[1]])
+        extent_max = hist_range[0][1]
+        tv = ax[i].imshow(
+            np.log10(im), cmap='bone_r', interpolation='quadric',
+            aspect='equal', extent=[0.0, extent_max, 0.0, extent_max])
+        ax[i].set_xlim([0.0-center[0], extent_max-center[0]])
+        ax[i].set_ylim([0.0-center[1], extent_max-center[1]])
         for j in range(len(data[:,0])):
             ax[i].annotate(str(j+1),(data[j,dproj[i][0]]+0.01,data[j,dproj[i][1]]+0.01),color=cp2[j])
 
@@ -531,7 +559,8 @@ def select(config_file):
     print('| ------------------------------------------------------------')
     sys.stdout.flush()
     rtb = p.rtb
-    rbuffer = p.rbuffer*sim_zlast.properties['a']/(sim_zlast.properties['h']*sim_zlast.properties['boxsize'].in_units('Mpc'))
+    # Convert rbuffer (Mpc) to kpc for physical-unit positions.
+    rbuffer = p.rbuffer * 1e3
     # Get Halo from Ramses clump finder
     if p.halo_finder and p.halo_finder not in ('ramses', 'clump', 'builtin'):
         d = halo_list_pynbody(sim_zlast, p.halo_finder)
@@ -545,6 +574,24 @@ def select(config_file):
         return
 
     flag = np.zeros(nc)
+    xsearch = p.xsearch
+    ysearch = p.ysearch
+    zsearch = p.zsearch
+    rsearch = p.rsearch
+    if p.rsearch > 0.0 and np.max(d[:,4:7]) > 1.0:
+        try:
+            boxsize_kpc = float(sim_zlast.properties['boxsize'].in_units('kpc'))
+        except Exception:
+            boxsize_kpc = None
+        if boxsize_kpc is not None:
+            if 0.0 <= xsearch <= 1.0:
+                xsearch *= boxsize_kpc
+            if 0.0 <= ysearch <= 1.0:
+                ysearch *= boxsize_kpc
+            if 0.0 <= zsearch <= 1.0:
+                zsearch *= boxsize_kpc
+            if 0.0 < rsearch <= 1.0:
+                rsearch *= boxsize_kpc
     boundary_min = p.boundary_min
     boundary_max = p.boundary_max
     if np.max(d[:,4:7]) > 1.0:
@@ -593,9 +640,9 @@ def select(config_file):
             print("| candidate {0} z = {1} outside [{2}, {3}]".format(
                 i, d[candidates[0][i],6], boundary_min, boundary_max))
             flag[i] = 4
-        if(p.rsearch>0.0):
-            rfilter = math.sqrt((d[candidates[0][i],4]-p.xsearch)**2+(d[candidates[0][i],5]-p.ysearch)**2+(d[candidates[0][i],6]-p.zsearch)**2)
-            if(rfilter>p.rsearch):
+        if(rsearch>0.0):
+            rfilter = math.sqrt((d[candidates[0][i],4]-xsearch)**2+(d[candidates[0][i],5]-ysearch)**2+(d[candidates[0][i],6]-zsearch)**2)
+            if(rfilter>rsearch):
                 flag[i] = 5
 
     wh1=np.where(flag==0)
