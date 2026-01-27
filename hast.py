@@ -103,6 +103,14 @@ class config_selection_obj():
         except:
             self.tree_nleaves = 100
         try:
+            self.boundary_min = config.getfloat('selection','boundary_min')
+        except:
+            self.boundary_min = 0.1
+        try:
+            self.boundary_max = config.getfloat('selection','boundary_max')
+        except:
+            self.boundary_max = 0.9
+        try:
             self.clump_mass_unit = config.get('selection','clump_mass_unit')
         except:
             self.clump_mass_unit = 'fraction'
@@ -559,13 +567,13 @@ def select(config_file):
         #    flag[i] = 4
         #if((d[candidates[0][i],6]<rbuffer)or(d[candidates[0][i],6]>1.0-2*rbuffer)):
         #    flag[i] = 4
-        if((d[candidates[0][i],4]<0.1)or(d[candidates[0][i],4]>0.9)):
+        if((d[candidates[0][i],4]<p.boundary_min)or(d[candidates[0][i],4]>p.boundary_max)):
                         #print i," x = ",(d[candidates[0][i],4])
                  flag[i] = 4
-        if((d[candidates[0][i],5]<0.1)or(d[candidates[0][i],5]>0.9)):
+        if((d[candidates[0][i],5]<p.boundary_min)or(d[candidates[0][i],5]>p.boundary_max)):
                         #print i, "y = ",(d[candidates[0][i],5])
             flag[i] = 4
-        if((d[candidates[0][i],6]<0.1)or(d[candidates[0][i],6]>0.9)):
+        if((d[candidates[0][i],6]<p.boundary_min)or(d[candidates[0][i],6]>p.boundary_max)):
                         #print i, "z = ",(d[candidates[0][i],6])
             flag[i] = 4
         if(p.rsearch>0.0):
