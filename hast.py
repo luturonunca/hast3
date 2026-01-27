@@ -94,6 +94,14 @@ class config_selection_obj():
             self.tree_nleaves = config.getint('selection','tree_nleaves')
         except:
             self.tree_nleaves = 100
+        try:
+            self.clump_mass_unit = config.get('selection','clump_mass_unit')
+        except:
+            self.clump_mass_unit = 'fraction'
+        try:
+            self.halo_finder = config.get('selection','halo_finder')
+        except:
+            self.halo_finder = 'ramses'
 
 class config_decontamination_obj():
     def parse_input(self, ConfigFile):
@@ -243,7 +251,7 @@ class config_analysis_obj():
             self.rank_function = 'mass'
 
 
-def halo_list(output,quiet=False):
+def halo_list(output,quiet=False,clump_mass_unit='fraction'):
 
     list = glob.glob(output+'/clump_?????.txt?????')
     if(not quiet):
@@ -269,8 +277,18 @@ def halo_list(output,quiet=False):
     else:
         # Fallback for arrays without unit support (assume already in Msol).
         mass_msol = mass
-    scale_m = float(np.sum(mass_msol))
-    data_sorted[:,10] *= scale_m
+    total_mass = float(np.sum(mass_msol))
+    particle_mass = float(np.min(mass_msol))
+    if clump_mass_unit == 'fraction':
+        data_sorted[:,10] *= total_mass
+    elif clump_mass_unit in ('particle', 'particles'):
+        data_sorted[:,10] *= particle_mass
+    elif clump_mass_unit == 'msol':
+        pass
+    else:
+        if not quiet:
+            print('[Warning] Unknown clump_mass_unit={0}; using fraction'.format(clump_mass_unit))
+        data_sorted[:,10] *= total_mass
     if(not quiet):
         min = np.min(data_sorted[:,10])
         max = np.max(data_sorted[:,10])
@@ -280,8 +298,82 @@ def halo_list(output,quiet=False):
         print('| Max mass      = {0:.2e} Msol'.format(max))
         print('| Min part mass = {0:.3e} Msol'.format(min_part_mass))
         print('| Max part mass = {0:.3e} Msol'.format(max_part_mass))
-        print('| Total mass    = {0:.2e} Msol'.format(scale_m))
+        print('| Total mass    = {0:.2e} Msol'.format(total_mass))
         print('| ------------------------------------------------------------')
+    return data_sorted
+
+
+def _halo_center_to_unit_box(sim, halo):
+    pos = None
+    if hasattr(halo, "properties"):
+        props = halo.properties
+        if "pos" in props:
+            pos = props["pos"]
+        elif all(k in props for k in ("Xc", "Yc", "Zc")):
+            pos = np.array([props["Xc"], props["Yc"], props["Zc"]])
+    if pos is None:
+        pos = np.mean(halo["pos"], axis=0)
+
+    pos_arr = np.array(pos)
+    if np.all(pos_arr >= 0.0) and np.all(pos_arr <= 1.0):
+        return pos_arr
+
+    boxsize = sim.properties.get("boxsize", None)
+    if boxsize is None:
+        return pos_arr
+
+    try:
+        if hasattr(pos, "in_units") and hasattr(boxsize, "in_units"):
+            pos_units = str(pos.units)
+            pos_val = pos.in_units(pos_units)
+            box_val = boxsize.in_units(pos_units)
+            return np.array(pos_val) / float(box_val)
+    except Exception:
+        pass
+
+    try:
+        return pos_arr / float(boxsize)
+    except Exception:
+        return pos_arr
+
+
+def _halo_mass_msol(halo):
+    mass = None
+    if hasattr(halo, "properties") and "mass" in halo.properties:
+        mass = halo.properties["mass"]
+    if mass is None:
+        mass = np.sum(halo["mass"])
+    if hasattr(mass, "in_units"):
+        return float(mass.in_units("Msol"))
+    return float(mass)
+
+
+def halo_list_pynbody(sim, halo_finder, quiet=False):
+    if not quiet:
+        print('| ------------------------------------------------------------')
+        print('| Reading halo catalogue via pynbody')
+        print('| ------------------------------------------------------------')
+
+    try:
+        try:
+            halos = sim.halos(halo_finder)
+        except TypeError:
+            halos = sim.halos(halo_finder=halo_finder)
+    except Exception:
+        print('[Error] halo finder "{0}" not available'.format(halo_finder))
+        sys.exit()
+
+    n_halos = len(halos)
+    if not quiet:
+        print('| nhalos        = {0}'.format(n_halos))
+
+    data = np.zeros((n_halos, 11), dtype=float)
+    for i in range(n_halos):
+        data[i, 0] = i
+        data[i, 4:7] = _halo_center_to_unit_box(sim, halos[i])
+        data[i, 10] = _halo_mass_msol(halos[i])
+
+    data_sorted = data[data[:, 10].argsort()]
     return data_sorted
 
 def __halo_list_tracking(output,conf):
@@ -425,7 +517,10 @@ def select(config_file):
     rtb = p.rtb
     rbuffer = p.rbuffer*sim_zlast.properties['a']/(sim_zlast.properties['h']*sim_zlast.properties['boxsize'].in_units('Mpc'))
     # Get Halo from Ramses clump finder
-    d = halo_list(p.output_zlast)
+    if p.halo_finder and p.halo_finder not in ('ramses', 'clump', 'builtin'):
+        d = halo_list_pynbody(sim_zlast, p.halo_finder)
+    else:
+        d = halo_list(p.output_zlast, clump_mass_unit=p.clump_mass_unit)
     candidates,neighbors = find_galaxy(d,rbuffer,p.min_mass,p.max_mass)
     nc = candidates[0].size
     print('| ------------------------------------------------------------')
