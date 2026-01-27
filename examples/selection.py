@@ -2,7 +2,7 @@
 Example: run HAST selection to find halos and Lagrangian regions.
 
 Usage:
-  python examples/selection.py /path/to/selection.ini
+  python examples/selection.py /path/to/selection.conf
 """
 
 import sys
@@ -13,7 +13,7 @@ import hast
 def main() -> int:
     # Expect a single argument: path to the selection config file.
     if len(sys.argv) != 2:
-        print("Usage: python examples/selection.py /path/to/selection.ini")
+        print("Usage: python examples/selection.py /path/to/selection.conf")
         return 1
 
     config_path = sys.argv[1]
