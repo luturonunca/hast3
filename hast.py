@@ -470,7 +470,7 @@ def __halo_list_tracking(output,conf):
 
 
 
-def plot_candidates(data,sim,center=[0.,0.,0.]):
+def plot_candidates(data,sim,center=[0.,0.,0.],comoving=False):
     sns.set_context('poster')
     sns.set_style("ticks",{"axes.grid": False,"xtick.direction":'in',"ytick.direction":'in'})
     cp2 = sns.color_palette("Set1",len(data[:,0]))
@@ -478,25 +478,42 @@ def plot_candidates(data,sim,center=[0.,0.,0.]):
     fig,ax = pyplot.subplots(1,2,figsize=(18,8),sharex=True)
     proj =[['y','x'],['z','x']]
     dproj =[[5,4],[6,4]]
+    if comoving:
+        try:
+            aexp = float(sim.properties['a'])
+        except Exception:
+            aexp = 1.0
+        data_plot = data.copy()
+        data_plot[:,4:7] /= aexp
+    else:
+        data_plot = data
     for i in range(len(ax)):
         x=proj[i][0]
         y=proj[i][1]
         ax[i].set_xlabel(x)
         ax[i].set_ylabel(y)
-        if np.max(sim.d[x]) > 1.0 or np.max(sim.d[y]) > 1.0:
+        if comoving:
+            sim_x = sim.d[x] / aexp
+            sim_y = sim.d[y] / aexp
+        else:
+            sim_x = sim.d[x]
+            sim_y = sim.d[y]
+        if np.max(sim_x) > 1.0 or np.max(sim_y) > 1.0:
             try:
                 boxsize = float(sim.properties['boxsize'].in_units('kpc'))
+                if comoving:
+                    boxsize /= aexp
             except Exception:
-                boxsize = float(np.max([np.max(sim.d[x]), np.max(sim.d[y])]))
+                boxsize = float(np.max([np.max(sim_x), np.max(sim_y)]))
             hist_range = [[0.0, boxsize], [0.0, boxsize]]
         else:
             hist_range = [[0.0, 1.0], [0.0, 1.0]]
         im,xedges,yedges = np.histogram2d(
-            sim.d[x], sim.d[y], weights=sim.d['mass'], bins=512, range=hist_range)
+            sim_x, sim_y, weights=sim.d['mass'], bins=512, range=hist_range)
         im = np.rot90(im)
         b = ax[i].get_position()
-        data[:,4:7] -= center
-        h = ax[i].scatter(data[:,dproj[i][0]],data[:,dproj[i][1]],s=50,c=cp2,alpha=0.5)
+        data_plot[:,4:7] -= center
+        h = ax[i].scatter(data_plot[:,dproj[i][0]],data_plot[:,dproj[i][1]],s=50,c=cp2,alpha=0.5)
         ax[i].set(adjustable='box', aspect='equal')
         extent_max = hist_range[0][1]
         tv = ax[i].imshow(
@@ -504,8 +521,8 @@ def plot_candidates(data,sim,center=[0.,0.,0.]):
             aspect='equal', extent=[0.0, extent_max, 0.0, extent_max])
         ax[i].set_xlim([0.0-center[0], extent_max-center[0]])
         ax[i].set_ylim([0.0-center[1], extent_max-center[1]])
-        for j in range(len(data[:,0])):
-            ax[i].annotate(str(j+1),(data[j,dproj[i][0]]+0.01,data[j,dproj[i][1]]+0.01),color=cp2[j])
+        for j in range(len(data_plot[:,0])):
+            ax[i].annotate(str(j+1),(data_plot[j,dproj[i][0]]+0.01,data_plot[j,dproj[i][1]]+0.01),color=cp2[j])
 
     return ax
 
@@ -666,8 +683,8 @@ def select(config_file):
                 i, d[candidates[0][i],5], boundary_min, boundary_max))
             flag[i] = 4
         if((d[candidates[0][i],6]<boundary_min)or(d[candidates[0][i],6]>boundary_max)):
-            print("| candidate {0} z = {1} outside [{2}, {3}]".format(
-                i, d[candidates[0][i],6], boundary_min, boundary_max))
+            # print("| candidate {0} z = {1} outside [{2}, {3}]".format(
+            #     i, d[candidates[0][i],6], boundary_min, boundary_max))
             flag[i] = 4
         if(rsearch>0.0):
             rfilter = math.sqrt((d[candidates[0][i],4]-xsearch)**2+(d[candidates[0][i],5]-ysearch)**2+(d[candidates[0][i],6]-zsearch)**2)
@@ -694,7 +711,7 @@ def select(config_file):
     if(wh1[0].size>0):
         if(p.plot):
             cp = sns.color_palette("Set1",wh1[0].size)
-            ax=plot_candidates(d[candidates[0][wh1],:],sim_zlast)
+            ax=plot_candidates(d[candidates[0][wh1],:],sim_zlast,comoving=True)
             if((p.plot)and(not p.plot_traceback)):
                 pyplot.savefig(p.fname+'.pdf',dpi=100)
             print('| ------------------------------------------------------------')
@@ -764,10 +781,17 @@ def select(config_file):
                 for k in range(len(ax)):
                     x=proj[k][0]
                     y=proj[k][1]
-                    points_2d = np.squeeze([[sim_zinit[x][region_zinit]],[sim_zinit[y][region_zinit]]]).transpose()
+                    points_2d = np.squeeze([[
+                        sim_zinit[x][region_zinit] / sim_zinit.properties['a']
+                    ],[
+                        sim_zinit[y][region_zinit] / sim_zinit.properties['a']
+                    ]]).transpose()
                     hull2d = ConvexHull(points_2d)
-                    ax[k].plot(sim_zinit[x][region_zinit][np.append(hull2d.vertices,hull2d.vertices[0])],sim_zinit[y][region_zinit][np.append(hull2d.vertices,hull2d.vertices[0])],'k-',lw=2,color=cp[i])
-                    left=np.argmin(sim_zinit[x][region_zinit][hull2d.vertices])
+                    aexp_init = sim_zinit.properties['a']
+                    xvals = sim_zinit[x][region_zinit] / aexp_init
+                    yvals = sim_zinit[y][region_zinit] / aexp_init
+                    ax[k].plot(xvals[np.append(hull2d.vertices,hull2d.vertices[0])],yvals[np.append(hull2d.vertices,hull2d.vertices[0])],'k-',lw=2,color=cp[i])
+                    left=np.argmin(xvals[hull2d.vertices])
                     #ax[k].annotate(str(i+1),(sim_zinit[x][region_zinit][hull2d.vertices[left]]-0.02,sim_zinit[y][region_zinit][hull2d.vertices[left]]-0.02),fontsize='x-small',color=cp[i])
 
             print('|     | --- Convex Hull                        -> vol={0:.3e} dens={1:.3e}'.format(hull.volume,float(np.sum(sim_zinit['mass'][region_zinit])/hull.volume)))
