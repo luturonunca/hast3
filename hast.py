@@ -263,13 +263,19 @@ def halo_list(output,quiet=False):
         i=i+1
     data_sorted = data_all[data_all[:,10].argsort()]
     d = pynbody.load(output)
-    scale_m = float(np.sum(d.d['mass'].in_units('Msol')))
+    mass = d.d['mass']
+    if hasattr(mass, "in_units"):
+        mass_msol = mass.in_units("Msol")
+    else:
+        # Fallback for arrays without unit support (assume already in Msol).
+        mass_msol = mass
+    scale_m = float(np.sum(mass_msol))
     data_sorted[:,10] *= scale_m
     if(not quiet):
         min = np.min(data_sorted[:,10])
         max = np.max(data_sorted[:,10])
-        min_part_mass = float(np.min(d.d['mass']).in_units('Msol'))
-        max_part_mass = float(np.max(d.d['mass']).in_units('Msol'))
+        min_part_mass = float(np.min(mass_msol))
+        max_part_mass = float(np.max(mass_msol))
         print('| Min mass      = {0:.2e} Msol'.format(min))
         print('| Max mass      = {0:.2e} Msol'.format(max))
         print('| Min part mass = {0:.3e} Msol'.format(min_part_mass))
