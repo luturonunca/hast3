@@ -182,17 +182,25 @@ def _print_halo_catalog_count(hc):
         print("ngroups:", count)
 
 
-def _read_halo_catalog_field(h5file, field_name):
+def _read_halo_catalog_field(h5file, field_names):
     import h5py
+    if isinstance(field_names, str):
+        field_names = [field_names]
     value = None
+    units = None
     def _visitor(name, obj):
-        nonlocal value
+        nonlocal value, units
         if value is not None:
             return
-        if isinstance(obj, h5py.Dataset) and name.endswith(field_name):
-            value = obj[()]
+        if not isinstance(obj, h5py.Dataset):
+            return
+        for field_name in field_names:
+            if name.endswith(field_name) or name == field_name:
+                value = obj[()]
+                units = obj.attrs.get("units", None)
+                return
     h5file.visititems(_visitor)
-    return value
+    return value, units
 
 
 def _convert_catalog_field(values, units, ds, target):
@@ -215,20 +223,10 @@ def _load_halo_catalog(sim, ds, catalog_dir, units_mode="auto"):
         print("[Error] h5py is required to read halo catalogs")
         sys.exit()
     with h5py.File(files[-1], "r") as f:
-        mass = _read_halo_catalog_field(f, "particle_mass")
-        pos_x = _read_halo_catalog_field(f, "particle_position_x")
-        pos_y = _read_halo_catalog_field(f, "particle_position_y")
-        pos_z = _read_halo_catalog_field(f, "particle_position_z")
-        mass_units = None
-        pos_units = None
-        try:
-            mass_units = f["particle_mass"].attrs.get("units", None)
-        except Exception:
-            pass
-        try:
-            pos_units = f["particle_position_x"].attrs.get("units", None)
-        except Exception:
-            pass
+        mass, mass_units = _read_halo_catalog_field(f, ["particle_mass", "mass"])
+        pos_x, pos_units = _read_halo_catalog_field(f, ["particle_position_x", "x"])
+        pos_y, _ = _read_halo_catalog_field(f, ["particle_position_y", "y"])
+        pos_z, _ = _read_halo_catalog_field(f, ["particle_position_z", "z"])
     if mass is None or pos_x is None or pos_y is None or pos_z is None:
         print("[Error] Halo catalog missing mass/position fields")
         sys.exit()
