@@ -118,6 +118,14 @@ class config_selection_obj():
             self.fof_link = config.getfloat("selection", "fof_link")
         except:
             self.fof_link = 0.0
+        try:
+            self.use_halo_catalog_for_selection = config.getboolean("selection", "use_halo_catalog_for_selection")
+        except:
+            self.use_halo_catalog_for_selection = False
+        try:
+            self.halo_catalog_dir = config.get("selection", "halo_catalog_dir")
+        except:
+            self.halo_catalog_dir = "halo_catalogs"
 
 
 def _find_ramses_info(path):
@@ -165,6 +173,47 @@ def _print_halo_catalog_count(hc):
         print("ngroups: unknown")
     else:
         print("ngroups:", count)
+
+
+def _read_halo_catalog_field(h5file, field_name):
+    import h5py
+    value = None
+    def _visitor(name, obj):
+        nonlocal value
+        if value is not None:
+            return
+        if isinstance(obj, h5py.Dataset) and name.endswith(field_name):
+            value = obj[()]
+    h5file.visititems(_visitor)
+    return value
+
+
+def _load_halo_catalog(sim, catalog_dir):
+    files = sorted(glob.glob(os.path.join(catalog_dir, "**", "*.h5"), recursive=True))
+    if not files:
+        print("[Error] No halo catalog files found in {0}".format(catalog_dir))
+        sys.exit()
+    try:
+        import h5py
+    except Exception:
+        print("[Error] h5py is required to read halo catalogs")
+        sys.exit()
+    with h5py.File(files[-1], "r") as f:
+        mass = _read_halo_catalog_field(f, "particle_mass")
+        pos_x = _read_halo_catalog_field(f, "particle_position_x")
+        pos_y = _read_halo_catalog_field(f, "particle_position_y")
+        pos_z = _read_halo_catalog_field(f, "particle_position_z")
+    if mass is None or pos_x is None or pos_y is None or pos_z is None:
+        print("[Error] Halo catalog missing mass/position fields")
+        sys.exit()
+    pos = np.vstack((pos_x, pos_y, pos_z)).T
+    data = np.zeros((pos.shape[0], 11), dtype=float)
+    data[:, 0] = np.arange(pos.shape[0])
+    data[:, 4:7] = pos
+    data[:, 10] = mass
+    if np.max(data[:, 4:7]) <= 1.0:
+        data[:, 4:7] *= sim["boxsize_kpc"]
+    return data[data[:, 10].argsort()]
 
 
 def _get_particle_data(ds):
@@ -528,7 +577,10 @@ def select(config_file):
     sys.stdout.flush()
 
     rbuffer_kpc = p.rbuffer * 1e3
-    d = halo_list(p.output_zlast, sim_zlast, clump_mass_unit=p.clump_mass_unit)
+    if p.use_halo_catalog_for_selection:
+        d = _load_halo_catalog(sim_zlast, p.halo_catalog_dir)
+    else:
+        d = halo_list(p.output_zlast, sim_zlast, clump_mass_unit=p.clump_mass_unit)
     candidates, neighbors = find_galaxy(d, rbuffer_kpc, p.min_mass, p.max_mass)
     nc = candidates[0].size
     print("| ------------------------------------------------------------")
