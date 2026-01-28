@@ -723,6 +723,12 @@ def select(config_file):
             except Exception:
                 print("| [Warning] Virial radius computation did not converge")
                 rr = 0.0
+            if rr <= 0.0:
+                mass_candidate = d[candidates[0][wh1[0][i]], 10]
+                if mean_density > 0.0:
+                    rr = (3.0 * mass_candidate / (4.0 * math.pi * 200.0 * mean_density)) ** (1.0 / 3.0)
+            if rr <= 0.0:
+                rr = rbuffer_kpc / max(p.rtb, 1.0)
             r200 = np.append(r200, rr)
 
         print("| Querying particle Tree")
