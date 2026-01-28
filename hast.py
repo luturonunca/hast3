@@ -248,6 +248,7 @@ def plot_candidates(data, sim, center=[0.0, 0.0, 0.0], comoving=False, show_poin
     proj = [["y", "x"], ["z", "x"]]
     dproj = [[5, 4], [6, 4]]
 
+    plot_scale = 1.0
     if comoving:
         aexp = sim["aexp"]
         data_plot = data.copy()
@@ -264,10 +265,12 @@ def plot_candidates(data, sim, center=[0.0, 0.0, 0.0], comoving=False, show_poin
     for i in range(len(ax)):
         x = proj[i][0]
         y = proj[i][1]
-        if comoving and (np.max(sim_x) > 1.0 or np.max(sim_y) > 1.0):
-            unit_label = " [kpc comov]"
-        elif (np.max(sim_x) > 1.0 or np.max(sim_y) > 1.0):
-            unit_label = " [kpc]"
+        if np.max(sim_x) > 1.0 or np.max(sim_y) > 1.0:
+            if comoving:
+                unit_label = " [Mpc comov]"
+            else:
+                unit_label = " [Mpc]"
+            plot_scale = 1000.0
         else:
             unit_label = " [code]"
         ax[i].set_xlabel(x + unit_label)
@@ -276,6 +279,7 @@ def plot_candidates(data, sim, center=[0.0, 0.0, 0.0], comoving=False, show_poin
             boxsize = sim["boxsize_kpc"]
             if comoving:
                 boxsize /= sim["aexp"]
+            boxsize /= plot_scale
             hist_range = [[0.0, boxsize], [0.0, boxsize]]
         else:
             hist_range = [[0.0, 1.0], [0.0, 1.0]]
@@ -295,10 +299,15 @@ def plot_candidates(data, sim, center=[0.0, 0.0, 0.0], comoving=False, show_poin
             sim_y_plot = sim_z
 
         im, xedges, yedges = np.histogram2d(
-            sim_x_plot, sim_y_plot, weights=sim["mass"], bins=512, range=hist_range
+            sim_x_plot / plot_scale,
+            sim_y_plot / plot_scale,
+            weights=sim["mass"],
+            bins=512,
+            range=hist_range,
         )
         im = np.rot90(im)
         data_plot[:, 4:7] -= center
+        data_plot[:, 4:7] /= plot_scale
         if show_points:
             ax[i].scatter(
                 data_plot[:, dproj[i][0]],
@@ -316,8 +325,8 @@ def plot_candidates(data, sim, center=[0.0, 0.0, 0.0], comoving=False, show_poin
             aspect="equal",
             extent=[0.0, extent_max, 0.0, extent_max],
         )
-        ax[i].set_xlim([0.0 - center[0], extent_max - center[0]])
-        ax[i].set_ylim([0.0 - center[1], extent_max - center[1]])
+        ax[i].set_xlim([0.0 - center[0] / plot_scale, extent_max - center[0] / plot_scale])
+        ax[i].set_ylim([0.0 - center[1] / plot_scale, extent_max - center[1] / plot_scale])
         if show_points:
             for j in range(len(data_plot[:, 0])):
                 ax[i].annotate(
@@ -591,21 +600,42 @@ def select(config_file):
         print("| Querying particle Tree")
         if p.plot:
             if np.max(sim_zlast["pos"]) > 1.0:
-                offset = 0.01 * (sim_zlast["boxsize_kpc"] / sim_zlast["aexp"])
+                offset = 0.01 * (sim_zlast["boxsize_kpc"] / sim_zlast["aexp"]) / 1000.0
             else:
                 offset = 0.01
             for i in range(wh1[0].size):
-                center = d[candidates[0][wh1[0][i]], 4:7] / sim_zlast["aexp"]
-                radius = r200[i] / sim_zlast["aexp"]
+                center = d[candidates[0][wh1[0][i]], 4:7] / sim_zlast["aexp"] / 1000.0
+                radius = r200[i] / sim_zlast["aexp"] / 1000.0
                 ax[0].add_patch(
-                    Circle((center[1], center[0]), radius, fill=False, edgecolor=cp_trace[i], lw=1.5)
+                    Circle(
+                        (center[1], center[0]),
+                        radius,
+                        fill=True,
+                        facecolor=cp_trace[i],
+                        edgecolor=cp_trace[i],
+                        lw=1.5,
+                        alpha=0.5,
+                    )
                 )
                 ax[1].add_patch(
-                    Circle((center[2], center[0]), radius, fill=False, edgecolor=cp_trace[i], lw=1.5)
+                    Circle(
+                        (center[2], center[0]),
+                        radius,
+                        fill=True,
+                        facecolor=cp_trace[i],
+                        edgecolor=cp_trace[i],
+                        lw=1.5,
+                        alpha=0.5,
+                    )
                 )
                 ax[0].annotate(
                     str(i + 1),
                     (center[1] + offset, center[0] + offset),
+                    color=cp_trace[i],
+                )
+                ax[1].annotate(
+                    str(i + 1),
+                    (center[2] + offset, center[0] + offset),
                     color=cp_trace[i],
                 )
             if not p.plot_traceback:
