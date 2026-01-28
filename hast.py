@@ -565,8 +565,6 @@ def select(config_file):
                 family="monospace",
                 bbox=dict(facecolor="white", alpha=0.7, edgecolor="none"),
             )
-            if (p.plot) and (not p.plot_traceback):
-                pyplot.savefig(p.fname + ".pdf", dpi=100)
             print("| ------------------------------------------------------------")
 
         print("| Building Tree [{0} particles]".format(len(sim_zlast["pos"])))
@@ -610,6 +608,8 @@ def select(config_file):
                     (center[1] + offset, center[0] + offset),
                     color=cp_trace[i],
                 )
+            if not p.plot_traceback:
+                pyplot.savefig(p.fname + ".pdf", dpi=100)
         region_zlast = tree.query_radius(d[candidates[0][wh1], 4:7], p.rtb * r200)
         virial_zlast = tree.query_radius(d[candidates[0][wh1], 4:7], r200)
         print("------------------------------------------------------------")
