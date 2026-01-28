@@ -793,10 +793,20 @@ def select(config_file):
         print("| Building Tree [{0} particles]".format(len(sim_zlast["pos"])))
         tree = KDTree(sim_zlast["pos"], leaf_size=p.tree_nleaves)
 
+        print("| Recentering halos (shrinking sphere)")
+        centers = d[candidates[0][wh1], 4:7].copy()
+        for i in range(wh1[0].size):
+            refined = _shrinking_sphere_center(
+                sim_zlast["pos"],
+                sim_zlast["mass"],
+                centers[i],
+                rbuffer_kpc,
+            )
+            centers[i] = refined
+
         print("| Computing Virial radii")
         mean_density = np.sum(sim_zlast["mass"]) / (sim_zlast["boxsize_kpc"] ** 3)
         r200 = np.array([])
-        centers = d[candidates[0][wh1], 4:7].copy()
         for i in range(wh1[0].size):
             try:
                 rr = _compute_r200(
@@ -817,32 +827,6 @@ def select(config_file):
             if rr <= 0.0:
                 rr = rbuffer_kpc / max(p.rtb, 1.0)
             r200 = np.append(r200, rr)
-
-        for i in range(wh1[0].size):
-            if r200[i] <= 0.0:
-                continue
-            idx = tree.query_radius(centers[i].reshape(1, -1), r200[i])[0]
-            if idx.size < 4:
-                continue
-            refined = _shrinking_sphere_center(
-                sim_zlast["pos"],
-                sim_zlast["mass"],
-                centers[i],
-                r200[i],
-            )
-            offset = np.linalg.norm(refined - centers[i])
-            if offset > 0.01 * r200[i]:
-                centers[i] = refined
-                rr = _compute_r200(
-                    tree,
-                    sim_zlast["pos"],
-                    sim_zlast["mass"],
-                    centers[i],
-                    rbuffer_kpc,
-                    mean_density,
-                )
-                if rr > 0.0:
-                    r200[i] = rr
 
         print("| Querying particle Tree")
         if p.plot:
