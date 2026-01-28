@@ -100,6 +100,10 @@ class config_selection_obj():
             self.create_halo_catalog = config.getboolean("selection", "create_halo_catalog")
         except:
             self.create_halo_catalog = False
+        try:
+            self.halo_finder = config.get("selection", "halo_finder")
+        except:
+            self.halo_finder = "hop"
 
 
 def _find_ramses_info(path):
@@ -399,9 +403,9 @@ def select(config_file):
             print("[Error] yt halo_analysis not available; install yt_astro_analysis")
             sys.exit()
         print("| ------------------------------------------------------------")
-        print("| Running HOP halo finder (yt)")
+        print("| Running {0} halo finder (yt)".format(p.halo_finder))
         print("| ------------------------------------------------------------")
-        hc = HaloCatalog(data_ds=ds_zlast, finder_method="hop")
+        hc = HaloCatalog(data_ds=ds_zlast, finder_method=p.halo_finder)
         hc.create()
 
     if p.min_mass >= p.max_mass:
