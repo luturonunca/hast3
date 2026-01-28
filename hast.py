@@ -109,6 +109,10 @@ class config_selection_obj():
             self.min_halo_particles = config.getint("selection", "min_halo_particles")
         except:
             self.min_halo_particles = 0
+        try:
+            self.hop_threshold = config.getfloat("selection", "hop_threshold")
+        except:
+            self.hop_threshold = 0.0
 
 
 def _find_ramses_info(path):
@@ -428,14 +432,24 @@ def select(config_file):
         print("| Running {0} halo finder (yt)".format(p.halo_finder))
         print("| ------------------------------------------------------------")
         finder_kwargs = {}
-        if p.halo_finder == "hop" and p.min_halo_particles > 0:
-            finder_kwargs["min_size"] = p.min_halo_particles
-        if finder_kwargs:
-            hc = HaloCatalog(data_ds=ds_zlast, finder_method=p.halo_finder, finder_kwargs=finder_kwargs)
-        else:
-            hc = HaloCatalog(data_ds=ds_zlast, finder_method=p.halo_finder)
-        hc.create()
-        if p.min_halo_particles > 0 and p.halo_finder != "hop":
+        used_finder_min = False
+        if p.halo_finder == "hop" and p.hop_threshold > 0.0:
+            finder_kwargs["threshold"] = p.hop_threshold
+        try:
+            if finder_kwargs:
+                hc = HaloCatalog(data_ds=ds_zlast, finder_method=p.halo_finder, finder_kwargs=finder_kwargs)
+            else:
+                hc = HaloCatalog(data_ds=ds_zlast, finder_method=p.halo_finder)
+            hc.create()
+            used_finder_min = bool(finder_kwargs)
+        except TypeError as e:
+            if finder_kwargs and "unexpected keyword argument" in str(e):
+                print("[Warning] Halo finder does not accept finder_kwargs; proceeding without them")
+                hc = HaloCatalog(data_ds=ds_zlast, finder_method=p.halo_finder)
+                hc.create()
+            else:
+                raise
+        if p.min_halo_particles > 0 and not used_finder_min:
             hc.add_filter("quantity_value", "particle_identifier", ">=", p.min_halo_particles)
             hc.create()
 
