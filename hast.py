@@ -129,6 +129,10 @@ class config_selection_obj():
             self.halo_catalog_dir = config.get("selection", "halo_catalog_dir")
         except:
             self.halo_catalog_dir = "halo_catalogs"
+        try:
+            self.halo_catalog_units = config.get("selection", "halo_catalog_units")
+        except:
+            self.halo_catalog_units = "auto"
 
 
 def _find_ramses_info(path):
@@ -200,7 +204,7 @@ def _convert_catalog_field(values, units, ds, target):
         return values
 
 
-def _load_halo_catalog(sim, ds, catalog_dir):
+def _load_halo_catalog(sim, ds, catalog_dir, units_mode="auto"):
     files = sorted(glob.glob(os.path.join(catalog_dir, "**", "*.h5"), recursive=True))
     if not files:
         print("[Error] No halo catalog files found in {0}".format(catalog_dir))
@@ -241,8 +245,21 @@ def _load_halo_catalog(sim, ds, catalog_dir):
     data[:, 0] = np.arange(pos.shape[0])
     data[:, 4:7] = pos
     data[:, 10] = mass
-    if np.max(data[:, 4:7]) <= 1.0:
+    max_pos = np.max(data[:, 4:7])
+    if max_pos <= 1.0:
         data[:, 4:7] *= sim["boxsize_kpc"]
+        max_pos = np.max(data[:, 4:7])
+
+    if units_mode == "auto":
+        phys = sim["boxsize_kpc"]
+        comov = sim["boxsize_kpc"] / sim["aexp"]
+        if abs(max_pos - comov) < abs(max_pos - phys):
+            units_mode = "comoving"
+        else:
+            units_mode = "physical"
+
+    if units_mode == "comoving":
+        data[:, 4:7] *= sim["aexp"]
     return data[data[:, 10].argsort()]
 
 
@@ -616,7 +633,7 @@ def select(config_file):
     rbuffer_kpc = p.rbuffer * 1e3
     use_catalog = p.create_halo_catalog or p.use_halo_catalog
     if use_catalog:
-        d = _load_halo_catalog(sim_zlast, ds_zlast, p.halo_catalog_dir)
+        d = _load_halo_catalog(sim_zlast, ds_zlast, p.halo_catalog_dir, units_mode=p.halo_catalog_units)
     else:
         d = halo_list(p.output_zlast, sim_zlast, clump_mass_unit=p.clump_mass_unit)
     candidates, neighbors = find_galaxy(d, rbuffer_kpc, p.min_mass, p.max_mass)
