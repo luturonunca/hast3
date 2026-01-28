@@ -837,6 +837,10 @@ def select(config_file):
                     xmean, ymean, zmean
                 )
             )
+            if npart < 4:
+                print("|     | --- Not enough particles for convex hull; skipping")
+                print("| ------------------------------------------------------------")
+                continue
             hull = ConvexHull(sim_zinit["pos"][region_zinit] - sim_zinit["pos"][region_zinit].mean(axis=0))
 
             if (p.plot) and (p.plot_traceback):
