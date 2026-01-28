@@ -119,9 +119,12 @@ class config_selection_obj():
         except:
             self.fof_link = 0.0
         try:
-            self.use_halo_catalog_for_selection = config.getboolean("selection", "use_halo_catalog_for_selection")
+            self.use_halo_catalog = config.getboolean("selection", "use_halo_catalog")
         except:
-            self.use_halo_catalog_for_selection = False
+            try:
+                self.use_halo_catalog = config.getboolean("selection", "use_halo_catalog_for_selection")
+            except:
+                self.use_halo_catalog = False
         try:
             self.halo_catalog_dir = config.get("selection", "halo_catalog_dir")
         except:
@@ -577,7 +580,8 @@ def select(config_file):
     sys.stdout.flush()
 
     rbuffer_kpc = p.rbuffer * 1e3
-    if p.use_halo_catalog_for_selection:
+    use_catalog = p.create_halo_catalog or p.use_halo_catalog
+    if use_catalog:
         d = _load_halo_catalog(sim_zlast, p.halo_catalog_dir)
     else:
         d = halo_list(p.output_zlast, sim_zlast, clump_mass_unit=p.clump_mass_unit)
@@ -775,6 +779,10 @@ def select(config_file):
                     i + 1, mass_candidate, len(neighbors[wh1[0][i]]), mass_region, npart
                 )
             )
+            if npart == 0:
+                print("|     | --- No matching particles in z_init; skipping")
+                print("| ------------------------------------------------------------")
+                continue
             safety = False
             box_kpc = sim_zinit["boxsize_kpc"]
             if (
