@@ -105,6 +105,10 @@ class config_selection_obj():
             self.halo_finder = config.get("selection", "halo_finder")
         except:
             self.halo_finder = "hop"
+        try:
+            self.min_halo_particles = config.getint("selection", "min_halo_particles")
+        except:
+            self.min_halo_particles = 0
 
 
 def _find_ramses_info(path):
@@ -425,6 +429,9 @@ def select(config_file):
         print("| ------------------------------------------------------------")
         hc = HaloCatalog(data_ds=ds_zlast, finder_method=p.halo_finder)
         hc.create()
+        if p.min_halo_particles > 0:
+            hc.add_filter("quantity_value", "particle_identifier", ">=", p.min_halo_particles)
+            hc.create()
 
     if p.min_mass >= p.max_mass:
         print("[Error] min_mass>max_mass")
