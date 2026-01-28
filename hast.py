@@ -191,7 +191,16 @@ def _read_halo_catalog_field(h5file, field_name):
     return value
 
 
-def _load_halo_catalog(sim, catalog_dir):
+def _convert_catalog_field(values, units, ds, target):
+    if units is None or units == "":
+        return values
+    try:
+        return ds.quan(values, units).to(target).value
+    except Exception:
+        return values
+
+
+def _load_halo_catalog(sim, ds, catalog_dir):
     files = sorted(glob.glob(os.path.join(catalog_dir, "**", "*.h5"), recursive=True))
     if not files:
         print("[Error] No halo catalog files found in {0}".format(catalog_dir))
@@ -206,9 +215,27 @@ def _load_halo_catalog(sim, catalog_dir):
         pos_x = _read_halo_catalog_field(f, "particle_position_x")
         pos_y = _read_halo_catalog_field(f, "particle_position_y")
         pos_z = _read_halo_catalog_field(f, "particle_position_z")
+        mass_units = None
+        pos_units = None
+        try:
+            mass_units = f["particle_mass"].attrs.get("units", None)
+        except Exception:
+            pass
+        try:
+            pos_units = f["particle_position_x"].attrs.get("units", None)
+        except Exception:
+            pass
     if mass is None or pos_x is None or pos_y is None or pos_z is None:
         print("[Error] Halo catalog missing mass/position fields")
         sys.exit()
+    if isinstance(mass_units, bytes):
+        mass_units = mass_units.decode()
+    if isinstance(pos_units, bytes):
+        pos_units = pos_units.decode()
+    mass = _convert_catalog_field(mass, mass_units, ds, "Msun")
+    pos_x = _convert_catalog_field(pos_x, pos_units, ds, "kpc")
+    pos_y = _convert_catalog_field(pos_y, pos_units, ds, "kpc")
+    pos_z = _convert_catalog_field(pos_z, pos_units, ds, "kpc")
     pos = np.vstack((pos_x, pos_y, pos_z)).T
     data = np.zeros((pos.shape[0], 11), dtype=float)
     data[:, 0] = np.arange(pos.shape[0])
@@ -589,7 +616,7 @@ def select(config_file):
     rbuffer_kpc = p.rbuffer * 1e3
     use_catalog = p.create_halo_catalog or p.use_halo_catalog
     if use_catalog:
-        d = _load_halo_catalog(sim_zlast, p.halo_catalog_dir)
+        d = _load_halo_catalog(sim_zlast, ds_zlast, p.halo_catalog_dir)
     else:
         d = halo_list(p.output_zlast, sim_zlast, clump_mass_unit=p.clump_mass_unit)
     candidates, neighbors = find_galaxy(d, rbuffer_kpc, p.min_mass, p.max_mass)
