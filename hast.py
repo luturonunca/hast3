@@ -113,6 +113,10 @@ class config_selection_obj():
             self.hop_threshold = config.getfloat("selection", "hop_threshold")
         except:
             self.hop_threshold = 0.0
+        try:
+            self.fof_link = config.getfloat("selection", "fof_link")
+        except:
+            self.fof_link = 0.0
 
 
 def _find_ramses_info(path):
@@ -435,6 +439,8 @@ def select(config_file):
         used_finder_min = False
         if p.halo_finder == "hop" and p.hop_threshold > 0.0:
             finder_kwargs["threshold"] = p.hop_threshold
+        if p.halo_finder == "fof" and p.fof_link > 0.0:
+            finder_kwargs["link"] = p.fof_link
         try:
             if finder_kwargs:
                 hc = HaloCatalog(data_ds=ds_zlast, finder_method=p.halo_finder, finder_kwargs=finder_kwargs)
