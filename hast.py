@@ -452,6 +452,10 @@ def select(config_file):
         if p.min_halo_particles > 0 and not used_finder_min:
             hc.add_filter("quantity_value", "particle_identifier", ">=", p.min_halo_particles)
             hc.create()
+        try:
+            print("ngroups:", hc.halos["particle_mass"].size)
+        except Exception:
+            print("ngroups: unknown")
 
     if p.min_mass >= p.max_mass:
         print("[Error] min_mass>max_mass")
