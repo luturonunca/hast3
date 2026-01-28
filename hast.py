@@ -545,31 +545,6 @@ def _compute_r200(tree, pos, mass, center, r_max, mean_density, overdensity=200.
     return float(r_sorted[ok[-1]])
 
 
-def _shrinking_sphere_center(pos, mass, center, r_init, shrink_factor=0.9, min_particles=50, max_iter=20):
-    if r_init <= 0.0:
-        return center
-    rel = pos - center
-    dist = np.linalg.norm(rel, axis=1)
-    inside = dist <= r_init
-    if inside.sum() == 0:
-        return center
-    pos_sel = pos[inside]
-    mass_sel = mass[inside]
-    center_curr = np.average(pos_sel, axis=0, weights=mass_sel)
-    for _ in range(max_iter):
-        rel = pos_sel - center_curr
-        dist = np.linalg.norm(rel, axis=1)
-        r_max = dist.max()
-        if r_max <= 0.0:
-            break
-        r_new = r_max * shrink_factor
-        inside = dist <= r_new
-        if inside.sum() < min_particles:
-            break
-        pos_sel = pos_sel[inside]
-        mass_sel = mass_sel[inside]
-        center_curr = np.average(pos_sel, axis=0, weights=mass_sel)
-    return center_curr
 
 
 def select(config_file):
@@ -793,17 +768,7 @@ def select(config_file):
         print("| Building Tree [{0} particles]".format(len(sim_zlast["pos"])))
         tree = KDTree(sim_zlast["pos"], leaf_size=p.tree_nleaves)
 
-        print("| Recentering halos (shrinking sphere)")
         centers = d[candidates[0][wh1], 4:7].copy()
-        for i in range(wh1[0].size):
-            refined = _shrinking_sphere_center(
-                sim_zlast["pos"],
-                sim_zlast["mass"],
-                centers[i],
-                rbuffer_kpc,
-            )
-            centers[i] = refined
-
         print("| Computing Virial radii")
         mean_density = np.sum(sim_zlast["mass"]) / (sim_zlast["boxsize_kpc"] ** 3)
         r200 = np.array([])
