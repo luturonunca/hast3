@@ -507,6 +507,7 @@ def select(config_file):
 
     if wh1[0].size > 0:
         if p.plot:
+            cp_trace = sns.color_palette("Set1", wh1[0].size)
             ax = plot_candidates(d[candidates[0][wh1], :], sim_zlast, comoving=True)
             if (p.plot) and (not p.plot_traceback):
                 pyplot.savefig(p.fname + ".pdf", dpi=100)
@@ -626,7 +627,7 @@ def select(config_file):
                         yvals[np.append(hull2d.vertices, hull2d.vertices[0])],
                         "k-",
                         lw=2,
-                        color=cp[i],
+                        color=cp_trace[i],
                     )
                     left = np.argmin(xvals[hull2d.vertices])
 
