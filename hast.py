@@ -427,9 +427,15 @@ def select(config_file):
         print("| ------------------------------------------------------------")
         print("| Running {0} halo finder (yt)".format(p.halo_finder))
         print("| ------------------------------------------------------------")
-        hc = HaloCatalog(data_ds=ds_zlast, finder_method=p.halo_finder)
+        finder_kwargs = {}
+        if p.halo_finder == "hop" and p.min_halo_particles > 0:
+            finder_kwargs["min_size"] = p.min_halo_particles
+        if finder_kwargs:
+            hc = HaloCatalog(data_ds=ds_zlast, finder_method=p.halo_finder, finder_kwargs=finder_kwargs)
+        else:
+            hc = HaloCatalog(data_ds=ds_zlast, finder_method=p.halo_finder)
         hc.create()
-        if p.min_halo_particles > 0:
+        if p.min_halo_particles > 0 and p.halo_finder != "hop":
             hc.add_filter("quantity_value", "particle_identifier", ">=", p.min_halo_particles)
             hc.create()
 
