@@ -221,11 +221,18 @@ def _load_halo_catalog(sim, catalog_dir):
 
 def _get_particle_data(ds):
     ad = ds.all_data()
-    pos_x = ad[("all", "particle_position_x")].to("kpc")
-    pos_y = ad[("all", "particle_position_y")].to("kpc")
-    pos_z = ad[("all", "particle_position_z")].to("kpc")
-    mass = ad[("all", "particle_mass")].to("Msun")
-    iord = np.array(ad[("all", "particle_identity")]).astype(np.int64)
+    try:
+        pos_x = ad[("DM", "particle_position_x")].to("kpc")
+        pos_y = ad[("DM", "particle_position_y")].to("kpc")
+        pos_z = ad[("DM", "particle_position_z")].to("kpc")
+        mass = ad[("DM", "particle_mass")].to("Msun")
+        iord = np.array(ad[("DM", "particle_identity")]).astype(np.int64)
+    except Exception:
+        pos_x = ad[("all", "particle_position_x")].to("kpc")
+        pos_y = ad[("all", "particle_position_y")].to("kpc")
+        pos_z = ad[("all", "particle_position_z")].to("kpc")
+        mass = ad[("all", "particle_mass")].to("Msun")
+        iord = np.array(ad[("all", "particle_identity")]).astype(np.int64)
 
     pos = np.vstack((pos_x.to_value("kpc"), pos_y.to_value("kpc"), pos_z.to_value("kpc"))).T
     mass_msol = mass.to_value("Msun")
