@@ -1,5 +1,6 @@
 import glob
 import math
+import os
 import sys
 import warnings
 import configparser
@@ -134,6 +135,36 @@ def _load_ds(path):
         raise IOError("No info_*.txt found in {0}".format(path))
     ds = yt.load(info_path)
     return ds
+
+
+def _print_halo_catalog_count(hc):
+    output_dir = getattr(hc, "output_dir", None) or "halo_catalogs"
+    files = sorted(glob.glob(os.path.join(output_dir, "*.h5")))
+    if not files:
+        print("ngroups: unknown")
+        return
+    try:
+        import h5py
+    except Exception:
+        print("ngroups: unknown (h5py missing)")
+        return
+    count = None
+    try:
+        with h5py.File(files[-1], "r") as f:
+            def _visitor(name, obj):
+                nonlocal count
+                if count is not None:
+                    return
+                if isinstance(obj, h5py.Dataset) and name.endswith("particle_mass"):
+                    count = obj.shape[0]
+            f.visititems(_visitor)
+    except Exception:
+        print("ngroups: unknown")
+        return
+    if count is None:
+        print("ngroups: unknown")
+    else:
+        print("ngroups:", count)
 
 
 def _get_particle_data(ds):
@@ -458,14 +489,7 @@ def select(config_file):
         if p.min_halo_particles > 0 and not used_finder_min:
             hc.add_filter("quantity_value", "particle_identifier", ">=", p.min_halo_particles)
             hc.create()
-        halos = getattr(hc, "halos", None)
-        if halos is not None:
-            try:
-                print("ngroups:", halos["particle_mass"].size)
-            except Exception:
-                print("ngroups: unknown")
-        else:
-            print("ngroups: unknown")
+        _print_halo_catalog_count(hc)
 
     if p.min_mass >= p.max_mass:
         print("[Error] min_mass>max_mass")
