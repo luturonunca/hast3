@@ -133,6 +133,10 @@ class config_selection_obj():
             self.halo_catalog_units = config.get("selection", "halo_catalog_units")
         except:
             self.halo_catalog_units = "auto"
+        try:
+            self.halo_catalog_apply_h = config.getboolean("selection", "halo_catalog_apply_h")
+        except:
+            self.halo_catalog_apply_h = False
 
 
 def _find_ramses_info(path):
@@ -212,7 +216,7 @@ def _convert_catalog_field(values, units, ds, target):
         return values
 
 
-def _load_halo_catalog(sim, ds, catalog_dir, units_mode="auto"):
+def _load_halo_catalog(sim, ds, catalog_dir, units_mode="auto", apply_h=False):
     files = sorted(glob.glob(os.path.join(catalog_dir, "**", "*.h5"), recursive=True))
     if not files:
         print("[Error] No halo catalog files found in {0}".format(catalog_dir))
@@ -258,6 +262,13 @@ def _load_halo_catalog(sim, ds, catalog_dir, units_mode="auto"):
 
     if units_mode == "comoving":
         data[:, 4:7] *= sim["aexp"]
+    if apply_h:
+        try:
+            hfac = float(ds.cosmology.hubble_factor(0.0))
+        except Exception:
+            hfac = None
+        if hfac:
+            data[:, 4:7] *= hfac
     return data[data[:, 10].argsort()]
 
 
@@ -631,7 +642,13 @@ def select(config_file):
     rbuffer_kpc = p.rbuffer * 1e3
     use_catalog = p.create_halo_catalog or p.use_halo_catalog
     if use_catalog:
-        d = _load_halo_catalog(sim_zlast, ds_zlast, p.halo_catalog_dir, units_mode=p.halo_catalog_units)
+        d = _load_halo_catalog(
+            sim_zlast,
+            ds_zlast,
+            p.halo_catalog_dir,
+            units_mode=p.halo_catalog_units,
+            apply_h=p.halo_catalog_apply_h,
+        )
     else:
         d = halo_list(p.output_zlast, sim_zlast, clump_mass_unit=p.clump_mass_unit)
     candidates, neighbors = find_galaxy(d, rbuffer_kpc, p.min_mass, p.max_mass)
@@ -804,16 +821,16 @@ def select(config_file):
                         alpha=0.5,
                     )
                 )
-                ax[0].annotate(
-                    str(i + 1),
-                    (center[1] + offset, center[0] + offset),
-                    color=cp_trace[i],
-                )
-                ax[1].annotate(
-                    str(i + 1),
-                    (center[2] + offset, center[0] + offset),
-                    color=cp_trace[i],
-                )
+                # ax[0].annotate(
+                #     str(i + 1),
+                #     (center[1] + offset, center[0] + offset),
+                #     color=cp_trace[i],
+                # )
+                # ax[1].annotate(
+                #     str(i + 1),
+                #     (center[2] + offset, center[0] + offset),
+                #     color=cp_trace[i],
+                # )
             if not p.plot_traceback:
                 pyplot.savefig(p.fname + ".pdf", dpi=100)
         region_zlast = tree.query_radius(d[candidates[0][wh1], 4:7], p.rtb * r200)
