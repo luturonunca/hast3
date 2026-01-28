@@ -9,6 +9,7 @@ import yt
 import seaborn as sns
 import matplotlib
 import matplotlib.pyplot as pyplot
+from matplotlib.patches import Circle
 from scipy.spatial import ConvexHull
 from sklearn.neighbors import KDTree
 
@@ -238,7 +239,7 @@ def halo_list(output, sim, quiet=False, clump_mass_unit="fraction"):
     return data_sorted
 
 
-def plot_candidates(data, sim, center=[0.0, 0.0, 0.0], comoving=False):
+def plot_candidates(data, sim, center=[0.0, 0.0, 0.0], comoving=False, show_points=True):
     sns.set_context("poster")
     sns.set_style("ticks", {"axes.grid": False, "xtick.direction": "in", "ytick.direction": "in"})
     cp2 = sns.color_palette("Set1", len(data[:, 0]))
@@ -298,7 +299,14 @@ def plot_candidates(data, sim, center=[0.0, 0.0, 0.0], comoving=False):
         )
         im = np.rot90(im)
         data_plot[:, 4:7] -= center
-        ax[i].scatter(data_plot[:, dproj[i][0]], data_plot[:, dproj[i][1]], s=50, c=cp2, alpha=0.5)
+        if show_points:
+            ax[i].scatter(
+                data_plot[:, dproj[i][0]],
+                data_plot[:, dproj[i][1]],
+                s=50,
+                c=cp2,
+                alpha=0.5,
+            )
         ax[i].set(adjustable="box", aspect="equal")
         extent_max = hist_range[0][1]
         ax[i].imshow(
@@ -310,12 +318,13 @@ def plot_candidates(data, sim, center=[0.0, 0.0, 0.0], comoving=False):
         )
         ax[i].set_xlim([0.0 - center[0], extent_max - center[0]])
         ax[i].set_ylim([0.0 - center[1], extent_max - center[1]])
-        for j in range(len(data_plot[:, 0])):
-            ax[i].annotate(
-                str(j + 1),
-                (data_plot[j, dproj[i][0]] + 0.01, data_plot[j, dproj[i][1]] + 0.01),
-                color=cp2[j],
-            )
+        if show_points:
+            for j in range(len(data_plot[:, 0])):
+                ax[i].annotate(
+                    str(j + 1),
+                    (data_plot[j, dproj[i][0]] + 0.01, data_plot[j, dproj[i][1]] + 0.01),
+                    color=cp2[j],
+                )
 
     pyplot.tight_layout()
     return ax
@@ -535,7 +544,27 @@ def select(config_file):
     if wh1[0].size > 0:
         if p.plot:
             cp_trace = sns.color_palette("Set1", wh1[0].size)
-            ax = plot_candidates(d[candidates[0][wh1], :], sim_zlast, comoving=True)
+            ax = plot_candidates(d[candidates[0][wh1], :], sim_zlast, comoving=True, show_points=False)
+            finder_label = p.halo_finder if p.create_halo_catalog else "ramses clump"
+            text = (
+                "finder: {0}\n"
+                "m_range: {1:.1e}–{2:.1e} Msun\n"
+                "r_tb: {3:.2f} R200\n"
+                "r_buffer: {4:.2f} Mpc".format(
+                    finder_label, p.min_mass, p.max_mass, p.rtb, p.rbuffer
+                )
+            )
+            ax[0].text(
+                0.02,
+                0.98,
+                text,
+                transform=ax[0].transAxes,
+                va="top",
+                ha="left",
+                fontsize="small",
+                family="monospace",
+                bbox=dict(facecolor="white", alpha=0.7, edgecolor="none"),
+            )
             if (p.plot) and (not p.plot_traceback):
                 pyplot.savefig(p.fname + ".pdf", dpi=100)
             print("| ------------------------------------------------------------")
@@ -562,6 +591,25 @@ def select(config_file):
             r200 = np.append(r200, rr)
 
         print("| Querying particle Tree")
+        if p.plot:
+            if np.max(sim_zlast["pos"]) > 1.0:
+                offset = 0.01 * (sim_zlast["boxsize_kpc"] / sim_zlast["aexp"])
+            else:
+                offset = 0.01
+            for i in range(wh1[0].size):
+                center = d[candidates[0][wh1[0][i]], 4:7] / sim_zlast["aexp"]
+                radius = r200[i] / sim_zlast["aexp"]
+                ax[0].add_patch(
+                    Circle((center[1], center[0]), radius, fill=False, edgecolor=cp_trace[i], lw=1.5)
+                )
+                ax[1].add_patch(
+                    Circle((center[2], center[0]), radius, fill=False, edgecolor=cp_trace[i], lw=1.5)
+                )
+                ax[0].annotate(
+                    str(i + 1),
+                    (center[1] + offset, center[0] + offset),
+                    color=cp_trace[i],
+                )
         region_zlast = tree.query_radius(d[candidates[0][wh1], 4:7], p.rtb * r200)
         virial_zlast = tree.query_radius(d[candidates[0][wh1], 4:7], r200)
         print("------------------------------------------------------------")
