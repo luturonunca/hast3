@@ -96,6 +96,10 @@ class config_selection_obj():
             self.clump_mass_unit = config.get("selection", "clump_mass_unit")
         except:
             self.clump_mass_unit = "fraction"
+        try:
+            self.create_halo_catalog = config.getboolean("selection", "create_halo_catalog")
+        except:
+            self.create_halo_catalog = False
 
 
 def _find_ramses_info(path):
@@ -255,8 +259,14 @@ def plot_candidates(data, sim, center=[0.0, 0.0, 0.0], comoving=False):
     for i in range(len(ax)):
         x = proj[i][0]
         y = proj[i][1]
-        ax[i].set_xlabel(x)
-        ax[i].set_ylabel(y)
+        if comoving and (np.max(sim_x) > 1.0 or np.max(sim_y) > 1.0):
+            unit_label = " [kpc comov]"
+        elif (np.max(sim_x) > 1.0 or np.max(sim_y) > 1.0):
+            unit_label = " [kpc]"
+        else:
+            unit_label = " [code]"
+        ax[i].set_xlabel(x + unit_label)
+        ax[i].set_ylabel(y + unit_label)
         if np.max(sim_x) > 1.0 or np.max(sim_y) > 1.0:
             boxsize = sim["boxsize_kpc"]
             if comoving:
@@ -303,6 +313,7 @@ def plot_candidates(data, sim, center=[0.0, 0.0, 0.0], comoving=False):
                 color=cp2[j],
             )
 
+    pyplot.tight_layout()
     return ax
 
 
@@ -380,6 +391,18 @@ def select(config_file):
     except IOError:
         print("[Error] {0} file specified cannot be read".format(p.output_zlast))
         sys.exit()
+
+    if p.create_halo_catalog:
+        try:
+            from yt.extensions.astro_analysis.halo_analysis import HaloCatalog
+        except Exception:
+            print("[Error] yt halo_analysis not available; install yt_astro_analysis")
+            sys.exit()
+        print("| ------------------------------------------------------------")
+        print("| Running HOP halo finder (yt)")
+        print("| ------------------------------------------------------------")
+        hc = HaloCatalog(data_ds=ds_zlast, finder_method="hop")
+        hc.create()
 
     if p.min_mass >= p.max_mass:
         print("[Error] min_mass>max_mass")
