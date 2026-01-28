@@ -545,6 +545,33 @@ def _compute_r200(tree, pos, mass, center, r_max, mean_density, overdensity=200.
     return float(r_sorted[ok[-1]])
 
 
+def _shrinking_sphere_center(pos, mass, center, r_init, shrink_factor=0.9, min_particles=50, max_iter=20):
+    if r_init <= 0.0:
+        return center
+    rel = pos - center
+    dist = np.linalg.norm(rel, axis=1)
+    inside = dist <= r_init
+    if inside.sum() == 0:
+        return center
+    pos_sel = pos[inside]
+    mass_sel = mass[inside]
+    center_curr = np.average(pos_sel, axis=0, weights=mass_sel)
+    for _ in range(max_iter):
+        rel = pos_sel - center_curr
+        dist = np.linalg.norm(rel, axis=1)
+        r_max = dist.max()
+        if r_max <= 0.0:
+            break
+        r_new = r_max * shrink_factor
+        inside = dist <= r_new
+        if inside.sum() < min_particles:
+            break
+        pos_sel = pos_sel[inside]
+        mass_sel = mass_sel[inside]
+        center_curr = np.average(pos_sel, axis=0, weights=mass_sel)
+    return center_curr
+
+
 def select(config_file):
     __version()
     p = config_selection_obj()
@@ -769,13 +796,14 @@ def select(config_file):
         print("| Computing Virial radii")
         mean_density = np.sum(sim_zlast["mass"]) / (sim_zlast["boxsize_kpc"] ** 3)
         r200 = np.array([])
+        centers = d[candidates[0][wh1], 4:7].copy()
         for i in range(wh1[0].size):
             try:
                 rr = _compute_r200(
                     tree,
                     sim_zlast["pos"],
                     sim_zlast["mass"],
-                    d[candidates[0][wh1[0][i]], 4:7],
+                    centers[i],
                     rbuffer_kpc,
                     mean_density,
                 )
@@ -790,6 +818,32 @@ def select(config_file):
                 rr = rbuffer_kpc / max(p.rtb, 1.0)
             r200 = np.append(r200, rr)
 
+        for i in range(wh1[0].size):
+            if r200[i] <= 0.0:
+                continue
+            idx = tree.query_radius(centers[i].reshape(1, -1), r200[i])[0]
+            if idx.size < 4:
+                continue
+            refined = _shrinking_sphere_center(
+                sim_zlast["pos"],
+                sim_zlast["mass"],
+                centers[i],
+                r200[i],
+            )
+            offset = np.linalg.norm(refined - centers[i])
+            if offset > 0.01 * r200[i]:
+                centers[i] = refined
+                rr = _compute_r200(
+                    tree,
+                    sim_zlast["pos"],
+                    sim_zlast["mass"],
+                    centers[i],
+                    rbuffer_kpc,
+                    mean_density,
+                )
+                if rr > 0.0:
+                    r200[i] = rr
+
         print("| Querying particle Tree")
         if p.plot:
             if np.max(sim_zlast["pos"]) > 1.0:
@@ -797,7 +851,7 @@ def select(config_file):
             else:
                 offset = 0.01
             for i in range(wh1[0].size):
-                center = d[candidates[0][wh1[0][i]], 4:7] / sim_zlast["aexp"] / 1000.0
+                center = centers[i] / sim_zlast["aexp"] / 1000.0
                 radius = r200[i] / sim_zlast["aexp"] / 1000.0
                 ax[0].add_patch(
                     Circle(
@@ -833,8 +887,8 @@ def select(config_file):
                 # )
             if not p.plot_traceback:
                 pyplot.savefig(p.fname + ".pdf", dpi=100)
-        region_zlast = tree.query_radius(d[candidates[0][wh1], 4:7], p.rtb * r200)
-        virial_zlast = tree.query_radius(d[candidates[0][wh1], 4:7], r200)
+        region_zlast = tree.query_radius(centers, p.rtb * r200)
+        virial_zlast = tree.query_radius(centers, r200)
         print("------------------------------------------------------------")
         for i in range(wh1[0].size):
             sys.stdout.flush()
@@ -842,7 +896,7 @@ def select(config_file):
             mass_region = float(np.sum(sim_zlast["mass"][region_zlast[i]]))
             mass_neighb = np.sum(d[neighbors[wh1[0][i]], 10])
             mass_candidate = d[candidates[0][wh1[0][i]], 10]
-            pos_candidate = np.squeeze(d[candidates[0][wh1[0][i]], 4:7])
+            pos_candidate = np.squeeze(centers[i])
 
             region_zinit = np.searchsorted(sim_zinit["iord"], ind_zlast, side="left")
             npart = len(region_zinit)
