@@ -282,15 +282,9 @@ def _clump_header_format(path):
 def _normalize_clump_columns(data, fmt):
     if fmt != "new":
         return data
-    if data.shape[1] < 12:
-        return data
-    data = data.copy()
-    # New format has parent column and peak_* positions; map to legacy slots.
-    data[:,3] = data[:,4]      # ncell
-    data[:,4:7] = data[:,5:8]  # x, y, z
-    data[:,8] = data[:,9]      # rho_max (use rho+)
-    data[:,9] = data[:,10]     # rho_ave
-    data[:,10] = data[:,11]    # mass_cl
+    # Current format: index, lev, parent, ncell, peak_x, peak_y, peak_z,
+    # rho-, rho+, rho_av, mass_cl, relevance -- positions and mass are
+    # already in the slots the rest of the code expects (4:7 and 10).
     return data
 
 def halo_list(output,quiet=False,clump_mass_unit='fraction'):
