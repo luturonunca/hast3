@@ -618,6 +618,14 @@ def select(config_file):
             except Exception:
                 pass
 
+    print('| Halo position range')
+    print('|   x [{0:.2f}, {1:.2f}] kpc'.format(np.min(d[:,4]), np.max(d[:,4])))
+    print('|   y [{0:.2f}, {1:.2f}] kpc'.format(np.min(d[:,5]), np.max(d[:,5])))
+    print('|   z [{0:.2f}, {1:.2f}] kpc'.format(np.min(d[:,6]), np.max(d[:,6])))
+    print('| Boundary [{0:.2f}, {1:.2f}] kpc'.format(boundary_min, boundary_max))
+    print('| Box size  {0:.2f} kpc'.format(float(sim_zlast.properties['boxsize'].in_units('kpc'))))
+    print('| ------------------------------------------------------------')
+
     for i in range(nc):
         # Check if neighbors number exceeds cireterion
         if(len(neighbors[i])>p.max_neighb):
