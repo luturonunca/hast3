@@ -140,7 +140,9 @@ class _UnitArray(np.ndarray):
     def in_units(self, target):
         if self._ds is None:
             return np.array(self)
-        return np.array(self._ds.arr(np.array(self), self._units).to(target))
+        src = self._units.replace('Msol', 'Msun')
+        tgt = target.replace('Msol', 'Msun')
+        return np.array(self._ds.arr(np.array(self), src).to(tgt))
 
 class _BoxSize:
     """Mimics pynbody's boxsize unit object."""
