@@ -780,7 +780,7 @@ def select(config_file):
 
             print('|     | --- Convex Hull                        -> vol={0:.3e} dens={1:.3e}'.format(hull.volume,float(np.sum(sim_zinit['mass'][region_zinit])/hull.volume)))
             try:
-                np.savetxt((p.fname+'_'+str(color_idx_map[i]+1)).strip(),sim_zinit['pos'][region_zinit][hull.vertices])
+                np.savetxt((p.fname+'_'+str(color_idx_map[i]+1)).strip(),sim_zinit['pos'][region_zinit][hull.vertices]/box_kpc)
                 print('|     | --- Particle list outputed to '+(p.fname+'_'+str(color_idx_map[i]+1)).strip())
             except:
                 print('[Error] Cannot write file '+(p.fname+'_'+str(color_idx_map[i]+1)).strip())
