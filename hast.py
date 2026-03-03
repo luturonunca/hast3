@@ -12,6 +12,7 @@ import numpy as np
 import configparser
 import seaborn as sns
 import matplotlib.pyplot as pyplot
+from matplotlib.backends.backend_pdf import PdfPages
 from scipy.spatial import ConvexHull
 from sklearn.neighbors import KDTree
 
@@ -106,6 +107,10 @@ class config_selection_obj():
             self.halo_finder = config.get('selection','halo_finder')
         except:
             self.halo_finder = 'ramses'
+        try:
+            self.full_analysis = config.getboolean('selection','full_analysis')
+        except:
+            self.full_analysis = False
 
 
 # ---------------------------------------------------------------------
@@ -659,12 +664,20 @@ def select(config_file):
     print('| ------------------------------------------------------------')
     sys.stdout.flush()
     if(wh1[0].size>0):
+        halo_colors = sns.color_palette("Set1",wh1[0].size)
         if(p.plot):
-            cp = sns.color_palette("Set1",wh1[0].size)
+            cp = halo_colors
             ax=plot_candidates(d[candidates[0][wh1],:],sim_zlast,comoving=True)
-            if((p.plot)and(not p.plot_traceback)):
+            if(not p.plot_traceback):
                 pyplot.savefig(p.fname+'.pdf',dpi=100)
             print('| ------------------------------------------------------------')
+        elif(p.full_analysis):
+            cp = halo_colors
+            ax=plot_candidates(d[candidates[0][wh1],:],sim_zlast,comoving=True)
+            print('| ------------------------------------------------------------')
+        hull_vols = []
+        hull_dens_vals = []
+        hull_halo_idx = []
         print('| Building Tree [{0} particles]'.format(len(sim_zlast)))
         print('| First halo pos  : {0}'.format(d[candidates[0][wh1[0][0]], 4:7]))
         print('| First part pos  : {0}'.format(sim_zlast['pos'][0]))
@@ -736,7 +749,11 @@ def select(config_file):
                 print('| ------------------------------------------------------------')
                 continue
             hull = ConvexHull(sim_zinit['pos'][region_zinit]-sim_zinit['pos'][region_zinit].mean(axis=0))
-            if((p.plot)and(p.plot_traceback)):
+            if(p.full_analysis):
+                hull_vols.append(hull.volume)
+                hull_dens_vals.append(float(np.sum(sim_zinit['mass'][region_zinit])/hull.volume))
+                hull_halo_idx.append(i)
+            if((p.plot or p.full_analysis)and(p.plot_traceback)):
                 proj =[['y','x'],['z','x']]
                 dproj =[[5,4],[6,4]]
                 for k in range(len(ax)):
@@ -765,6 +782,27 @@ def select(config_file):
             sys.stdout.flush()
         if((p.plot)and(p.plot_traceback)):
             pyplot.savefig(p.fname+'.pdf',dpi=100)
+        if(p.full_analysis):
+            pdf = PdfPages(p.fname+'_analysis.pdf')
+            pdf.savefig(ax[0].get_figure(),dpi=100)
+            if(len(hull_vols)>0):
+                fig_scatter,ax_s = pyplot.subplots(figsize=(8,6))
+                for k in range(len(hull_vols)):
+                    ax_s.scatter(hull_vols[k],hull_dens_vals[k],
+                                 color=halo_colors[hull_halo_idx[k]],s=100,zorder=5)
+                    ax_s.annotate(str(hull_halo_idx[k]+1),(hull_vols[k],hull_dens_vals[k]),
+                                  textcoords='offset points',xytext=(6,4),
+                                  color=halo_colors[hull_halo_idx[k]])
+                ax_s.set_xscale('log')
+                ax_s.set_yscale('log')
+                ax_s.set_xlabel('Lagrangian volume [kpc$^3$]')
+                ax_s.set_ylabel('Lagrangian density [M$_\\odot$ kpc$^{-3}$]')
+                ax_s.set_title('Lagrangian region: volume vs density')
+                sns.despine()
+                pdf.savefig(fig_scatter,dpi=100)
+                pyplot.close(fig_scatter)
+            pdf.close()
+            print('| Full analysis saved to {0}_analysis.pdf'.format(p.fname))
 
     else:
         print('| No haloes matching the criteria')
