@@ -237,11 +237,8 @@ def _load_sim(path):
 # Returns radius in the same units as sim positions (physical kpc).
 # ---------------------------------------------------------------------
 
-def _virial_radius(sim, cen, r_max):
-    pos    = np.array(sim['pos'])
-    mass   = np.array(sim['mass'].in_units('Msol'))
+def _virial_radius(pos, mass, boxsize_kpc, cen, r_max):
     center = np.array(cen)
-    boxsize_kpc = float(sim.properties['boxsize'].in_units('kpc'))
     mean_density = np.sum(mass) / (boxsize_kpc**3)
     r = np.linalg.norm(pos - center, axis=1)
     idx = np.where(r <= r_max)[0]
@@ -673,10 +670,13 @@ def select(config_file):
         print('| First part pos  : {0}'.format(sim_zlast['pos'][0]))
         tree = KDTree(np.squeeze((sim_zlast['pos'])),leaf_size=p.tree_nleaves)
         r200 = np.array([])
+        _part_pos     = np.array(sim_zlast['pos'])
+        _part_mass    = np.array(sim_zlast['mass'].in_units('Msol'))
+        _boxsize_kpc  = float(sim_zlast.properties['boxsize'].in_units('kpc'))
         print('| Computing Virial radii')
         for i in range(wh1[0].size):
             try:
-                rr = _virial_radius(sim_zlast,cen=d[candidates[0][wh1[0][i]],4:7],r_max=rbuffer)
+                rr = _virial_radius(_part_pos,_part_mass,_boxsize_kpc,cen=d[candidates[0][wh1[0][i]],4:7],r_max=rbuffer)
             except:
                 print('| [Warning] Virial radius computation did not converge')
                 rr = 0.
