@@ -696,6 +696,10 @@ def select(config_file):
             region_zinit = np.searchsorted(sim_zinit['iord'],ind_zlast,side='left')
             npart = len(region_zinit)
             print('| {0:3d} | m_candidate={1:.2e} Msol | {2} neighbors | m_region={3:.2e} Msol | npart={4} '.format(i+1,mass_candidate,len(neighbors[wh1[0][i]]),mass_region,npart))
+            if npart == 0:
+                print('|     | --- No particles traced back; skipping')
+                print('| ------------------------------------------------------------')
+                continue
             safety = False
             try:
                 box_kpc = float(sim_zinit.properties['boxsize'].in_units('kpc'))
@@ -722,7 +726,7 @@ def select(config_file):
             zmean = float(np.mean(sim_zinit['z'][region_zinit]))
             print('|     | --- Candidate halo properties')
             print('|     | --------------- m200                   -> {0:.3e} Msol'.format(m200))
-            print('|     | --------------- r200                   -> [{0:.1f} kpc phys,{1:.1f} kpc comov, {2:.4f} cu]'.format(r200[i]*to_kpc,r200[i]*to_kpc_comov,r200[i]))
+            print('|     | --------------- r200                   -> [{0:.1f} kpc phys,{1:.1f} kpc comov, {2:.4f} cu]'.format(r200[i],r200[i]/sim_zlast.properties['a'],r200[i]/to_kpc))
             print('|     | --------------- lambda                 -> {0:.4f}'.format(lambda200))
             print('|     | --------------- npart(r<r200)          -> {0}'.format(npart_r200))
             print('|     | --- Candidate halo position            -> [{0:.5f},{1:.5f},{2:.5f}]'.format(pos_candidate[0],pos_candidate[1],pos_candidate[2]))
