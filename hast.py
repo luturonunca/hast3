@@ -690,6 +690,8 @@ def select(config_file):
         hull_vols = []
         hull_dens_vals = []
         hull_halo_idx = []
+        hull_m_ratio = []
+        hull_n_neighbors = []
         if(p.plot or p.full_analysis):
             cp = halo_colors
             ax=plot_candidates(d[candidates[0][wh1][m200_mask],:],sim_zlast,comoving=True)
@@ -756,6 +758,8 @@ def select(config_file):
                 hull_vols.append(hull.volume)
                 hull_dens_vals.append(float(np.sum(sim_zinit['mass'][region_zinit])/hull.volume))
                 hull_halo_idx.append(color_idx_map[i])
+                hull_m_ratio.append(mass_region/m200)
+                hull_n_neighbors.append(len(neighbors[wh1[0][i]]))
             if((p.plot or p.full_analysis)and(p.plot_traceback)):
                 proj =[['y','x'],['z','x']]
                 dproj =[[5,4],[6,4]]
@@ -789,18 +793,24 @@ def select(config_file):
             pdf = PdfPages(p.fname+'_analysis.pdf')
             pdf.savefig(ax[0].get_figure(),dpi=100)
             if(len(hull_vols)>0):
-                fig_scatter,ax_s = pyplot.subplots(figsize=(8,6))
+                fig_scatter,(ax_s0,ax_s1) = pyplot.subplots(1,2,figsize=(14,6))
                 for k in range(len(hull_vols)):
-                    ax_s.scatter(hull_vols[k],hull_dens_vals[k],
-                                 color=halo_colors[hull_halo_idx[k]],s=100,zorder=5)
-                    ax_s.annotate(str(hull_halo_idx[k]+1),(hull_vols[k],hull_dens_vals[k]),
-                                  textcoords='offset points',xytext=(6,4),
-                                  color=halo_colors[hull_halo_idx[k]])
-                ax_s.set_xscale('log')
-                ax_s.set_yscale('log')
-                ax_s.set_xlabel('Lagrangian volume [kpc$^3$]')
-                ax_s.set_ylabel('Lagrangian density [M$_\\odot$ kpc$^{-3}$]')
-                ax_s.set_title('Lagrangian region: volume vs density')
+                    c  = halo_colors[hull_halo_idx[k]]
+                    lbl = str(hull_halo_idx[k]+1)
+                    ax_s0.scatter(hull_vols[k],hull_dens_vals[k],color=c,s=100,zorder=5)
+                    ax_s0.annotate(lbl,(hull_vols[k],hull_dens_vals[k]),
+                                   textcoords='offset points',xytext=(6,4),color=c)
+                    ax_s1.scatter(hull_n_neighbors[k],hull_m_ratio[k],color=c,s=100,zorder=5)
+                    ax_s1.annotate(lbl,(hull_n_neighbors[k],hull_m_ratio[k]),
+                                   textcoords='offset points',xytext=(6,4),color=c)
+                ax_s0.set_xscale('log')
+                ax_s0.set_yscale('log')
+                ax_s0.set_xlabel('Lagrangian volume [kpc$^3$]')
+                ax_s0.set_ylabel('Lagrangian density [M$_\\odot$ kpc$^{-3}$]')
+                ax_s0.set_title('Lagrangian region')
+                ax_s1.set_xlabel('Number of neighbours')
+                ax_s1.set_ylabel('$m_\\mathrm{region}\\,/\\,m_{200}$')
+                ax_s1.set_title('Environment')
                 sns.despine()
                 pyplot.tight_layout()
                 pdf.savefig(fig_scatter,dpi=100)
