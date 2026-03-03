@@ -434,7 +434,7 @@ def halo_list_yt(sim, halo_finder, quiet=False):
 def plot_candidates(data,sim,center=[0.,0.,0.],comoving=False):
     sns.set_context('poster')
     sns.set_style("ticks",{"axes.grid": False,"xtick.direction":'in',"ytick.direction":'in'})
-    cp2 = sns.color_palette("Set1",len(data[:,0]))
+    cp2 = sns.color_palette("husl",len(data[:,0]))
     print('| Plotting ',len(data[:,0]),' haloes')
     fig,ax = pyplot.subplots(1,2,figsize=(18,8),sharex=True)
     proj =[['y','x'],['z','x']]
@@ -664,7 +664,7 @@ def select(config_file):
     print('| ------------------------------------------------------------')
     sys.stdout.flush()
     if(wh1[0].size>0):
-        halo_colors = sns.color_palette("Set1",wh1[0].size)
+        halo_colors = sns.color_palette("husl",wh1[0].size)
         if(p.plot):
             cp = halo_colors
             ax=plot_candidates(d[candidates[0][wh1],:],sim_zlast,comoving=True)
