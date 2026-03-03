@@ -664,20 +664,6 @@ def select(config_file):
     print('| ------------------------------------------------------------')
     sys.stdout.flush()
     if(wh1[0].size>0):
-        halo_colors = sns.color_palette("husl",wh1[0].size)
-        if(p.plot):
-            cp = halo_colors
-            ax=plot_candidates(d[candidates[0][wh1],:],sim_zlast,comoving=True)
-            if(not p.plot_traceback):
-                pyplot.savefig(p.fname+'.pdf',dpi=100)
-            print('| ------------------------------------------------------------')
-        elif(p.full_analysis):
-            cp = halo_colors
-            ax=plot_candidates(d[candidates[0][wh1],:],sim_zlast,comoving=True)
-            print('| ------------------------------------------------------------')
-        hull_vols = []
-        hull_dens_vals = []
-        hull_halo_idx = []
         print('| Building Tree [{0} particles]'.format(len(sim_zlast)))
         print('| First halo pos  : {0}'.format(d[candidates[0][wh1[0][0]], 4:7]))
         print('| First part pos  : {0}'.format(sim_zlast['pos'][0]))
@@ -697,9 +683,26 @@ def select(config_file):
         print('| Querying particle Tree')
         region_zlast = tree.query_radius(d[candidates[0][wh1],4:7],rtb*r200)
         virial_zlast = tree.query_radius(d[candidates[0][wh1],4:7],r200)
+        m200_all = np.array([float(np.sum(sim_zlast['mass'][virial_zlast[i]].in_units('Msol'))) for i in range(wh1[0].size)])
+        m200_mask = m200_all >= p.min_mass
+        color_idx_map = np.cumsum(m200_mask) - 1
+        halo_colors = sns.color_palette("husl",int(m200_mask.sum()))
+        hull_vols = []
+        hull_dens_vals = []
+        hull_halo_idx = []
+        if(p.plot or p.full_analysis):
+            cp = halo_colors
+            ax=plot_candidates(d[candidates[0][wh1][m200_mask],:],sim_zlast,comoving=True)
+            if(p.plot and not p.plot_traceback):
+                pyplot.savefig(p.fname+'.pdf',dpi=100)
+            print('| ------------------------------------------------------------')
         print('------------------------------------------------------------')
         for i in range(wh1[0].size):
             sys.stdout.flush()
+            if not m200_mask[i]:
+                print('| {0:3d} | m200 {1:.2e} Msol < min_mass; skipping'.format(i+1,m200_all[i]))
+                print('| ------------------------------------------------------------')
+                continue
             ind_zlast = sim_zlast['iord'][region_zlast[i]]
             mass_region = float(np.sum(sim_zlast['mass'][region_zlast[i]].in_units('Msol')))
             mass_neighb = np.sum(d[neighbors[wh1[0][i]],10])
@@ -732,11 +735,7 @@ def select(config_file):
                 npart_r200 = len(virial_zlast[i])
             else:
                 npart_r200 = 0
-            m200 = float(np.sum(sim_zlast['mass'][virial_zlast[i]].in_units('Msol')))
-            if m200 < p.min_mass:
-                print('|     | --- m200 {0:.2e} Msol < min_mass {1:.2e} Msol; skipping'.format(m200,p.min_mass))
-                print('| ------------------------------------------------------------')
-                continue
+            m200 = m200_all[i]
             lambda200 = 0.0
             xmean = float(np.mean(sim_zinit['x'][region_zinit]))
             ymean = float(np.mean(sim_zinit['y'][region_zinit]))
@@ -756,7 +755,7 @@ def select(config_file):
             if(p.full_analysis):
                 hull_vols.append(hull.volume)
                 hull_dens_vals.append(float(np.sum(sim_zinit['mass'][region_zinit])/hull.volume))
-                hull_halo_idx.append(i)
+                hull_halo_idx.append(color_idx_map[i])
             if((p.plot or p.full_analysis)and(p.plot_traceback)):
                 proj =[['y','x'],['z','x']]
                 dproj =[[5,4],[6,4]]
@@ -772,7 +771,7 @@ def select(config_file):
                     aexp_init = sim_zinit.properties['a']
                     xvals = sim_zinit[x][region_zinit] / aexp_init
                     yvals = sim_zinit[y][region_zinit] / aexp_init
-                    ax[k].plot(xvals[np.append(hull2d.vertices,hull2d.vertices[0])],yvals[np.append(hull2d.vertices,hull2d.vertices[0])],'k-',lw=2,color=cp[i])
+                    ax[k].plot(xvals[np.append(hull2d.vertices,hull2d.vertices[0])],yvals[np.append(hull2d.vertices,hull2d.vertices[0])],'k-',lw=2,color=cp[color_idx_map[i]])
                     left=np.argmin(xvals[hull2d.vertices])
 
             print('|     | --- Convex Hull                        -> vol={0:.3e} dens={1:.3e}'.format(hull.volume,float(np.sum(sim_zinit['mass'][region_zinit])/hull.volume)))
@@ -803,6 +802,7 @@ def select(config_file):
                 ax_s.set_ylabel('Lagrangian density [M$_\\odot$ kpc$^{-3}$]')
                 ax_s.set_title('Lagrangian region: volume vs density')
                 sns.despine()
+                pyplot.tight_layout()
                 pdf.savefig(fig_scatter,dpi=100)
                 pyplot.close(fig_scatter)
             pdf.close()
