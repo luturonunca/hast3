@@ -733,6 +733,10 @@ def select(config_file):
             else:
                 npart_r200 = 0
             m200 = float(np.sum(sim_zlast['mass'][virial_zlast[i]].in_units('Msol')))
+            if m200 < p.min_mass:
+                print('|     | --- m200 {0:.2e} Msol < min_mass {1:.2e} Msol; skipping'.format(m200,p.min_mass))
+                print('| ------------------------------------------------------------')
+                continue
             lambda200 = 0.0
             xmean = float(np.mean(sim_zinit['x'][region_zinit]))
             ymean = float(np.mean(sim_zinit['y'][region_zinit]))
