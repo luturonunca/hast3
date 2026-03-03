@@ -669,6 +669,8 @@ def select(config_file):
                 pyplot.savefig(p.fname+'.pdf',dpi=100)
             print('| ------------------------------------------------------------')
         print('| Building Tree [{0} particles]'.format(len(sim_zlast)))
+        print('| First halo pos  : {0}'.format(d[candidates[0][wh1[0][0]], 4:7]))
+        print('| First part pos  : {0}'.format(sim_zlast['pos'][0]))
         tree = KDTree(np.squeeze((sim_zlast['pos'])),leaf_size=p.tree_nleaves)
         r200 = np.array([])
         print('| Computing Virial radii')
