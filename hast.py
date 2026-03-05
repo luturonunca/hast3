@@ -780,7 +780,18 @@ def select(config_file):
 
             print('|     | --- Convex Hull                        -> vol={0:.3e} dens={1:.3e}'.format(hull.volume,float(np.sum(sim_zinit['mass'][region_zinit])/hull.volume)))
             try:
-                np.savetxt((p.fname+'_'+str(color_idx_map[i]+1)).strip(),sim_zinit['pos'][region_zinit][hull.vertices]/box_kpc)
+                _hull_pts = sim_zinit['pos'][region_zinit][hull.vertices]/box_kpc
+                # Add a tiny reproducible jitter (1e-7 in unit-box coords ~ 2.5 pc for a 25 Mpc box).
+                # MUSIC uses a simple gift-wrapping convex hull algorithm that explicitly does not
+                # handle degeneracies (nearly co-planar vertices). When hull.vertices are passed
+                # in scipy's arbitrary index order, the gift-wrapping initialization can pick a
+                # degenerate starting edge, producing outward-pointing face normals that cause
+                # check_point() to return False for all grid cells -> all-zero ic_refmap -> no
+                # AMR refinement in RAMSES. The perturbation places vertices in general position,
+                # guaranteeing correct face orientation. Fixed seed ensures reproducibility.
+                _rng = np.random.RandomState(seed=12345)
+                _hull_pts = _hull_pts + _rng.randn(*_hull_pts.shape) * 1e-7
+                np.savetxt((p.fname+'_'+str(color_idx_map[i]+1)).strip(), _hull_pts)
                 print('|     | --- Particle list outputed to '+(p.fname+'_'+str(color_idx_map[i]+1)).strip())
             except:
                 print('[Error] Cannot write file '+(p.fname+'_'+str(color_idx_map[i]+1)).strip())
