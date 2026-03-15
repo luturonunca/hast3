@@ -640,6 +640,44 @@ def _r200_kpc(mass_msol, params):
     return (3.0 * mass_msol / (4.0 * np.pi * 200.0 * rho_crit_msol_kpc3))**(1.0 / 3.0)
 
 
+def _save_merger_tree(fname, halo_id, nodes, edges):
+    """Persist merger tree nodes and edges to a JSON cache file."""
+    import json
+    payload = {
+        'halo_id': halo_id,
+        'nodes': [
+            {k: (v.tolist() if hasattr(v, 'tolist') else v) for k, v in nd.items()}
+            for nd in nodes
+        ],
+        'edges': [list(e) for e in edges],
+    }
+    path = '{0}_tree_{1}.json'.format(fname, halo_id)
+    with open(path, 'w') as f:
+        json.dump(payload, f)
+    print('| Merger tree cached to {0}'.format(path))
+
+
+def _load_merger_tree(fname, halo_id):
+    """Load merger tree from cache. Returns (nodes, edges) or (None, None)."""
+    import json
+    path = '{0}_tree_{1}.json'.format(fname, halo_id)
+    if not os.path.exists(path):
+        return None, None
+    try:
+        with open(path, 'r') as f:
+            payload = json.load(f)
+        nodes = []
+        for nd in payload['nodes']:
+            nd['pos'] = np.array(nd['pos'])
+            nodes.append(nd)
+        edges = [tuple(e) for e in payload['edges']]
+        print('| Merger tree loaded from cache: {0}'.format(path))
+        return nodes, edges
+    except Exception as e:
+        print('| [Warning] Could not read merger tree cache {0}: {1}'.format(path, e))
+        return None, None
+
+
 def _lookback_time_gyr(aexp, params):
     """Lookback time in Gyr at a given aexp, using flat LCDM from info params."""
     H0 = params.get('H0', 70.0)
@@ -1270,9 +1308,14 @@ def select(config_file):
             for k in range(len(hull_vols)):
                 if hull_safety[k]:
                     continue
-                nodes_mt, edges_mt = build_merger_tree(
-                    sim_dir_mt, hull_halo_ids[k],
-                    p.output_zlast, p.output_zinit)
+                halo_id_mt = hull_halo_ids[k]
+                nodes_mt, edges_mt = _load_merger_tree(p.fname, halo_id_mt)
+                if nodes_mt is None:
+                    nodes_mt, edges_mt = build_merger_tree(
+                        sim_dir_mt, halo_id_mt,
+                        p.output_zlast, p.output_zinit)
+                    if nodes_mt:
+                        _save_merger_tree(p.fname, halo_id_mt, nodes_mt, edges_mt)
                 if not nodes_mt:
                     continue
                 fig_mt, (ax_t, ax_m) = pyplot.subplots(1, 2, figsize=(18, 8))
