@@ -603,10 +603,16 @@ def _top_halos_kpc_msol(output_dir, params):
         pos = data_all[:, 4:7]
         m   = data_all[:, 10]
 
-    # positions: normalise to [0,1] then convert to kpc
+    # Positions in RAMSES clump/halo files are in [0,1] box-fraction units.
+    # unit_l = aexp * box_Mpc * 3.08e24 / (h/100) [cm] = full physical box in cm.
+    # So pos * (unit_l/kpc_cm) gives physical kpc directly.
+    # NOTE: 'boxlen' in the RAMSES info file is the coarse cell size (1/2^levelmin),
+    # NOT the full box length, so it must NOT be used as a multiplier here.
     if np.max(pos) > 1.5:
-        pos = pos / boxlen
-    pos_kpc = pos * boxlen * to_kpc
+        # Positions written in cell units [0, nx_loc]; convert to [0,1].
+        # boxlen_info = 1/nx_loc, so multiply by boxlen to normalise.
+        pos = pos * boxlen
+    pos_kpc = pos * to_kpc
     m_msol  = m * to_msol
 
     return np.column_stack([idx, pos_kpc, m_msol])
