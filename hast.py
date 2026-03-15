@@ -755,31 +755,32 @@ def build_merger_tree(sim_dir, halo_id, output_zlast, output_zinit,
                       mass_frac_min=0.1, r_search_factor=2.0):
     """Build a merger tree for a given halo by backward snapshot traversal.
 
-    Reads halo_*.txt files (or clump_*.txt top-level entries as fallback) at
-    each snapshot between output_zinit and output_zlast. No particle data is
-    loaded — all unit conversions use the info_*.txt file.
+    Tracks halos using particle ID (iord) overlap between snapshots, following
+    the same strategy as the HAST decontamination function. At each snapshot
+    the progenitor is the halo whose particles share the highest fraction of
+    IDs with the particles of the tracked descendant.
 
     Parameters
     ----------
     sim_dir : str
         Directory containing all output_XXXXX subdirectories.
     halo_id : int
-        Halo index at output_zlast (matches the index column in halo/clump files).
+        Halo index at output_zlast (column 0 in halo/clump files).
     output_zlast : str
         Path to the last (low-z) output directory.
     output_zinit : str
         Path to the first (high-z) output directory; traversal stops here.
     mass_frac_min : float
-        Minimum progenitor mass as a fraction of the tracked halo mass.
-        Progenitors below this threshold are ignored as secondary branches.
+        Minimum iord overlap fraction (relative to tracked halo) to record
+        a secondary progenitor as a merger event.
     r_search_factor : float
-        Search radius expressed in units of the tracked halo R200.
+        Particle gathering radius in units of halo R200 (physical kpc).
 
     Returns
     -------
     nodes : list of dict
-        One entry per halo found. Keys: snap (str), halo_id (int),
-        mass (Msol), pos (kpc ndarray), z (float), r200 (kpc), is_main (bool).
+        Keys: snap, halo_id, mass (Msol), pos (comoving kpc), z, r200 (kpc),
+        is_main.
     edges : list of tuple
         (progenitor_node_idx, descendant_node_idx, kind) where kind is
         'main' or 'merger'.
@@ -809,35 +810,36 @@ def build_merger_tree(sim_dir, halo_id, output_zlast, output_zinit,
         return [], []
     row0   = row0[0]
     r200_0 = _r200_kpc(row0[4], params0)
-    # Convert physical kpc -> comoving kpc for tracking (comoving positions
-    # are stable across snapshots; physical positions drift with Hubble flow).
-    pos0_com  = row0[1:4] / aexp0
-    r200_0_com = r200_0 / aexp0
+
+    # Load particles at output_zlast; gather iord within r_search_factor*r200
+    try:
+        sim0 = _load_sim(output_zlast)
+    except Exception as e:
+        print('[build_merger_tree] Could not load particles at {0}: {1}'.format(output_zlast, e))
+        return [], []
+    tree0 = KDTree(sim0['pos'])
+    hits0 = tree0.query_radius([row0[1:4]], r_search_factor * r200_0)[0]
+    iord0 = sim0['iord'][hits0]
+    if len(iord0) == 0:
+        print('[build_merger_tree] No particles found in root halo')
+        return [], []
+
     nodes.append({
         'snap':    output_zlast,
         'halo_id': int(row0[0]),
         'mass':    row0[4],
-        'pos':     pos0_com,
+        'pos':     row0[1:4] / aexp0,  # comoving kpc
         'z':       1.0 / aexp0 - 1.0,
         'r200':    r200_0,
         'is_main': True,
     })
 
-    # watch_list: (node_idx, pos_comoving_kpc, mass_msol, r200_comoving_kpc)
-    watch_list = [(0, pos0_com, row0[4], r200_0_com)]
-
-    n_with_data = sum(
-        1 for s in snaps[1:]
-        if glob.glob(s + '/halo_?????.txt?????') or glob.glob(s + '/clump_?????.txt?????')
-    )
-    print('[build_merger_tree] {0} snapshots in range, {1} have halo/clump files'.format(
-        len(snaps), n_with_data))
-
-    print('[build_merger_tree] root comoving pos={0}  r200_com={1:.1f} kpc'.format(
-        np.round(pos0_com, 1), r200_0_com))
+    # watch_list: (node_idx, tracked_iord_array, pos_physical_kpc, r200_physical_kpc)
+    watch_list = [(0, iord0, row0[1:4], r200_0)]
+    print('[build_merger_tree] root: halo_id={0}  npart={1}  r200={2:.1f} kpc'.format(
+        halo_id, len(iord0), r200_0))
 
     # --- Backward traversal ---
-    _first = True
     for snap in snaps[1:]:
         if not watch_list:
             break
@@ -847,68 +849,64 @@ def build_merger_tree(sim_dir, halo_id, output_zlast, output_zinit,
         if halos is None:
             continue
         z = 1.0 / aexp - 1.0
-        # Work in comoving kpc so Hubble flow doesn't shift the search centre.
-        pos_com = halos[:, 1:4] / aexp
-        if _first:
-            print('[build_merger_tree] first snap {0}  z={1:.2f}  n_halos={2}'.format(
-                os.path.basename(snap), z, len(halos)))
-            print('[build_merger_tree] halo pos_com range x=[{0:.1f},{1:.1f}] y=[{2:.1f},{3:.1f}] z=[{4:.1f},{5:.1f}] kpc'.format(
-                pos_com[:,0].min(), pos_com[:,0].max(),
-                pos_com[:,1].min(), pos_com[:,1].max(),
-                pos_com[:,2].min(), pos_com[:,2].max()))
-            _first = False
-        tree = KDTree(pos_com)
+
+        try:
+            sim = _load_sim(snap)
+        except Exception:
+            continue
+        tree_part = KDTree(sim['pos'])
+        iord_snap = sim['iord']
 
         new_watch = []
-        for (desc_idx, pos, mass, r200_com) in watch_list:
-            hits = tree.query_radius([pos], r_search_factor * r200_com)[0]
-            if len(hits) == 0:
-                continue
-            candidates  = halos[hits]
-            mass_ratios = candidates[:, 4] / mass
+        for (desc_idx, tracked_iord, pos_phys, r200) in watch_list:
+            # Compute iord overlap fraction for every halo in the clump file
+            overlaps = []
+            for hi in range(len(halos)):
+                h      = halos[hi]
+                r200_h = _r200_kpc(h[4], params)
+                parts  = tree_part.query_radius([h[1:4]], r_search_factor * r200_h)[0]
+                iord_h = iord_snap[parts]
+                n_common = len(np.intersect1d(tracked_iord, iord_h, assume_unique=False))
+                frac = float(n_common) / max(len(tracked_iord), 1)
+                overlaps.append((hi, frac, r200_h, iord_h, h[4]))
 
-            # main progenitor: best mass continuity
-            best      = hits[np.argmin(np.abs(mass_ratios - 1.0))]
-            main_row  = halos[best]
-            main_r200 = _r200_kpc(main_row[4], params)
-            main_r200_com = main_r200 / aexp
-            main_pos_com  = pos_com[best]
-            main_idx  = len(nodes)
+            overlaps.sort(key=lambda x: x[1], reverse=True)
+            if not overlaps or overlaps[0][1] == 0.0:
+                continue
+
+            # Main progenitor: highest iord overlap
+            best_hi, best_frac, best_r200, best_iord, best_mass = overlaps[0]
+            main_row = halos[best_hi]
+            main_idx = len(nodes)
             nodes.append({
                 'snap':    snap,
                 'halo_id': int(main_row[0]),
-                'mass':    main_row[4],
-                'pos':     main_pos_com,
+                'mass':    best_mass,
+                'pos':     main_row[1:4] / aexp,  # comoving kpc
                 'z':       z,
-                'r200':    main_r200,
+                'r200':    best_r200,
                 'is_main': True,
             })
             edges.append((main_idx, desc_idx, 'main'))
-            new_watch.append((main_idx, main_pos_com, main_row[4], main_r200_com))
+            new_watch.append((main_idx, best_iord, main_row[1:4], best_r200))
 
-            # secondary progenitors: other halos in radius above mass threshold
-            min_mass = mass_frac_min * mass
-            for gi, hi in enumerate(hits):
-                if hi == best:
-                    continue
-                if halos[hi, 4] < min_mass:
-                    continue
-                sec_row  = halos[hi]
-                sec_r200 = _r200_kpc(sec_row[4], params)
-                sec_r200_com = sec_r200 / aexp
-                sec_pos_com  = pos_com[hi]
-                sec_idx  = len(nodes)
+            # Secondary progenitors: overlap above mass_frac_min threshold
+            for (hi, frac, r200_h, iord_h, mass_h) in overlaps[1:]:
+                if frac < mass_frac_min:
+                    break
+                sec_row = halos[hi]
+                sec_idx = len(nodes)
                 nodes.append({
                     'snap':    snap,
                     'halo_id': int(sec_row[0]),
-                    'mass':    sec_row[4],
-                    'pos':     sec_pos_com,
+                    'mass':    mass_h,
+                    'pos':     sec_row[1:4] / aexp,  # comoving kpc
                     'z':       z,
-                    'r200':    sec_r200,
+                    'r200':    r200_h,
                     'is_main': False,
                 })
                 edges.append((sec_idx, desc_idx, 'merger'))
-                new_watch.append((sec_idx, sec_pos_com, sec_row[4], sec_r200_com))
+                # Mergers are not added to watch_list — they have joined the main branch
 
         watch_list = new_watch
 
