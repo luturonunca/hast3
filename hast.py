@@ -827,7 +827,11 @@ def build_merger_tree(sim_dir, halo_id, output_zlast, output_zinit,
     print('[build_merger_tree] {0} snapshots in range, {1} have halo/clump files'.format(
         len(snaps), n_with_data))
 
+    print('[build_merger_tree] root comoving pos={0}  r200_com={1:.1f} kpc'.format(
+        np.round(pos0_com, 1), r200_0_com))
+
     # --- Backward traversal ---
+    _first = True
     for snap in snaps[1:]:
         if not watch_list:
             break
@@ -839,6 +843,14 @@ def build_merger_tree(sim_dir, halo_id, output_zlast, output_zinit,
         z = 1.0 / aexp - 1.0
         # Work in comoving kpc so Hubble flow doesn't shift the search centre.
         pos_com = halos[:, 1:4] / aexp
+        if _first:
+            print('[build_merger_tree] first snap {0}  z={1:.2f}  n_halos={2}'.format(
+                os.path.basename(snap), z, len(halos)))
+            print('[build_merger_tree] halo pos_com range x=[{0:.1f},{1:.1f}] y=[{2:.1f},{3:.1f}] z=[{4:.1f},{5:.1f}] kpc'.format(
+                pos_com[:,0].min(), pos_com[:,0].max(),
+                pos_com[:,1].min(), pos_com[:,1].max(),
+                pos_com[:,2].min(), pos_com[:,2].max()))
+            _first = False
         tree = KDTree(pos_com)
 
         new_watch = []
