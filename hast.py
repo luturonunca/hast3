@@ -113,6 +113,10 @@ class config_selection_obj():
         except:
             self.full_analysis = False
         try:
+            self.merger_tree = config.getboolean('selection','merger_tree')
+        except:
+            self.merger_tree = True
+        try:
             self.levelmin = config.getint('selection','levelmin')
         except:
             self.levelmin = 7
@@ -1255,7 +1259,12 @@ def select(config_file):
                 pyplot.tight_layout()
                 pdf.savefig(fig_scatter,dpi=100)
                 pyplot.close(fig_scatter)
-            # Merger trees for candidates without MUSIC risk
+            # Merger trees for candidates without MUSIC risk (skipped if merger_tree=False)
+            if not p.merger_tree:
+                print('| Merger tree disabled (merger_tree=False)')
+                pdf.close()
+                print('| Full analysis saved to {0}_analysis.pdf'.format(p.fname))
+                return
             sim_dir_mt = os.path.dirname(os.path.abspath(p.output_zlast))
             params_mt  = _read_info_params(p.output_zlast)
             for k in range(len(hull_vols)):
