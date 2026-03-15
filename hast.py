@@ -792,6 +792,7 @@ def build_merger_tree(sim_dir, halo_id, output_zlast, output_zinit,
 
     # --- Root node at output_zlast ---
     params0 = _read_info_params(output_zlast)
+    aexp0   = params0.get('aexp', 1.0)
     halos0  = _top_halos_kpc_msol(output_zlast, params0)
     if halos0 is None:
         print('[build_merger_tree] No halo files at {0}'.format(output_zlast))
@@ -802,18 +803,22 @@ def build_merger_tree(sim_dir, halo_id, output_zlast, output_zinit,
         return [], []
     row0   = row0[0]
     r200_0 = _r200_kpc(row0[4], params0)
+    # Convert physical kpc -> comoving kpc for tracking (comoving positions
+    # are stable across snapshots; physical positions drift with Hubble flow).
+    pos0_com  = row0[1:4] / aexp0
+    r200_0_com = r200_0 / aexp0
     nodes.append({
         'snap':    output_zlast,
         'halo_id': int(row0[0]),
         'mass':    row0[4],
-        'pos':     row0[1:4],
-        'z':       1.0 / params0['aexp'] - 1.0,
+        'pos':     pos0_com,
+        'z':       1.0 / aexp0 - 1.0,
         'r200':    r200_0,
         'is_main': True,
     })
 
-    # watch_list: (node_idx, pos_kpc, mass_msol, r200_kpc)
-    watch_list = [(0, row0[1:4], row0[4], r200_0)]
+    # watch_list: (node_idx, pos_comoving_kpc, mass_msol, r200_comoving_kpc)
+    watch_list = [(0, pos0_com, row0[4], r200_0_com)]
 
     n_with_data = sum(
         1 for s in snaps[1:]
@@ -827,58 +832,65 @@ def build_merger_tree(sim_dir, halo_id, output_zlast, output_zinit,
         if not watch_list:
             break
         params = _read_info_params(snap)
+        aexp   = params.get('aexp', 1.0)
         halos  = _top_halos_kpc_msol(snap, params)
         if halos is None:
             continue
-        z = 1.0 / params['aexp'] - 1.0
-        tree = KDTree(halos[:, 1:4])
+        z = 1.0 / aexp - 1.0
+        # Work in comoving kpc so Hubble flow doesn't shift the search centre.
+        pos_com = halos[:, 1:4] / aexp
+        tree = KDTree(pos_com)
 
         new_watch = []
-        for (desc_idx, pos, mass, r200) in watch_list:
-            hits = tree.query_radius([pos], r_search_factor * r200)[0]
+        for (desc_idx, pos, mass, r200_com) in watch_list:
+            hits = tree.query_radius([pos], r_search_factor * r200_com)[0]
             if len(hits) == 0:
                 continue
             candidates  = halos[hits]
             mass_ratios = candidates[:, 4] / mass
 
             # main progenitor: best mass continuity
-            best     = hits[np.argmin(np.abs(mass_ratios - 1.0))]
-            main_row = halos[best]
+            best      = hits[np.argmin(np.abs(mass_ratios - 1.0))]
+            main_row  = halos[best]
             main_r200 = _r200_kpc(main_row[4], params)
+            main_r200_com = main_r200 / aexp
+            main_pos_com  = pos_com[best]
             main_idx  = len(nodes)
             nodes.append({
                 'snap':    snap,
                 'halo_id': int(main_row[0]),
                 'mass':    main_row[4],
-                'pos':     main_row[1:4],
+                'pos':     main_pos_com,
                 'z':       z,
                 'r200':    main_r200,
                 'is_main': True,
             })
             edges.append((main_idx, desc_idx, 'main'))
-            new_watch.append((main_idx, main_row[1:4], main_row[4], main_r200))
+            new_watch.append((main_idx, main_pos_com, main_row[4], main_r200_com))
 
             # secondary progenitors: other halos in radius above mass threshold
             min_mass = mass_frac_min * mass
-            for gi in hits:
-                if gi == best:
+            for gi, hi in enumerate(hits):
+                if hi == best:
                     continue
-                if halos[gi, 4] < min_mass:
+                if halos[hi, 4] < min_mass:
                     continue
-                sec_row  = halos[gi]
+                sec_row  = halos[hi]
                 sec_r200 = _r200_kpc(sec_row[4], params)
+                sec_r200_com = sec_r200 / aexp
+                sec_pos_com  = pos_com[hi]
                 sec_idx  = len(nodes)
                 nodes.append({
                     'snap':    snap,
                     'halo_id': int(sec_row[0]),
                     'mass':    sec_row[4],
-                    'pos':     sec_row[1:4],
+                    'pos':     sec_pos_com,
                     'z':       z,
                     'r200':    sec_r200,
                     'is_main': False,
                 })
                 edges.append((sec_idx, desc_idx, 'merger'))
-                new_watch.append((sec_idx, sec_row[1:4], sec_row[4], sec_r200))
+                new_watch.append((sec_idx, sec_pos_com, sec_row[4], sec_r200_com))
 
         watch_list = new_watch
 
