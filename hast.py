@@ -815,6 +815,13 @@ def build_merger_tree(sim_dir, halo_id, output_zlast, output_zinit,
     # watch_list: (node_idx, pos_kpc, mass_msol, r200_kpc)
     watch_list = [(0, row0[1:4], row0[4], r200_0)]
 
+    n_with_data = sum(
+        1 for s in snaps[1:]
+        if glob.glob(s + '/halo_?????.txt?????') or glob.glob(s + '/clump_?????.txt?????')
+    )
+    print('[build_merger_tree] {0} snapshots in range, {1} have halo/clump files'.format(
+        len(snaps), n_with_data))
+
     # --- Backward traversal ---
     for snap in snaps[1:]:
         if not watch_list:
