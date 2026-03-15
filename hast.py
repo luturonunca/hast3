@@ -876,8 +876,9 @@ def build_merger_tree(sim_dir, halo_id, output_zlast, output_zinit,
         'is_main': True,
     })
 
-    # watch_list: (node_idx, tracked_iord_array, pos_physical_kpc, r200_physical_kpc)
-    watch_list = [(0, iord0, row0[1:4], r200_0)]
+    # watch_list: (node_idx, tracked_iord_array, com_comoving_kpc, r200_kpc)
+    # Comoving COM is stable across snapshots and lets us predict position at earlier epochs.
+    watch_list = [(0, iord0, row0[1:4] / aexp0, r200_0)]
     print('[build_merger_tree] root: halo_id={0}  npart={1}  r200={2:.1f} kpc'.format(
         halo_id, len(iord0), r200_0))
 
@@ -903,83 +904,99 @@ def build_merger_tree(sim_dir, halo_id, output_zlast, output_zinit,
         pm_mass    = float(np.min(mass_snap[mass_snap > 0]))
 
         new_watch = []
-        for (desc_idx, tracked_iord, pos_desc, r200_desc) in watch_list:
-            # --- Locate tracked particles at this snapshot by iord ---
-            # This avoids relying on clump peak positions, which may be in a
-            # different unit frame than yt particle positions.
+        for (desc_idx, tracked_iord, com_comoving_desc, r200_desc) in watch_list:
+            # --- Step 1: locate all tracked particles at this snapshot by iord ---
             found_mask = np.isin(iord_snap, tracked_iord)
             if not np.any(found_mask):
                 continue
-
-            found_pos  = pos_snap[found_mask]          # yt physical kpc
+            found_pos  = pos_snap[found_mask]   # physical kpc, yt frame
             found_iord = iord_snap[found_mask]
+            n_found    = len(found_iord)
 
-            # COM of tracked particles → reliable position in yt frame
-            com_main = np.mean(found_pos, axis=0)
+            # --- Step 2: seed the main-branch COM using the previous comoving position ---
+            # Converting comoving → physical at current aexp avoids bias from the
+            # global mean when tracked particles are in two separate groups (pre-merger).
+            pos_expected = com_comoving_desc * aexp  # physical kpc at current epoch
+            dist_from_expected = np.linalg.norm(found_pos - pos_expected, axis=1)
+            near_expected = dist_from_expected < r_search_factor * r200_desc
+            if np.any(near_expected):
+                com_main = np.mean(found_pos[near_expected], axis=0)
+            else:
+                # Fallback: global mean (happens at very early times when halo moves a lot)
+                com_main = np.mean(found_pos, axis=0)
 
-            # Gather all particles near COM for updated tracked set
-            parts_main = tree_part.query_radius([com_main], r_search_factor * r200_desc)[0]
-            iord_main  = iord_snap[parts_main] if len(parts_main) > 0 else found_iord
+            # --- Step 3: gather all particles near the main-branch COM ---
+            parts_main  = tree_part.query_radius([com_main], r_search_factor * r200_desc)[0]
+            iord_ball   = iord_snap[parts_main] if len(parts_main) > 0 else np.array([], dtype=np.int64)
 
-            mass_main  = len(iord_main) * pm_mass
+            # New tracked set for main branch = only original tracked particles in the ball
+            new_tracked_main = found_iord[np.isin(found_iord, iord_ball)]
+            if len(new_tracked_main) == 0:
+                continue
+
+            # Refine COM from tracked particles (not all ball particles)
+            com_main = np.mean(pos_snap[np.isin(iord_snap, new_tracked_main)], axis=0)
+
+            mass_main  = len(iord_ball) * pm_mass
             r200_main  = _r200_kpc(mass_main, params)
 
-            # Nearest clump label (metadata only — not used for particle gathering)
-            halo_id_main = -1
+            # Nearest clump label (metadata only)
+            halo_id_main    = -1
             mass_label_main = mass_main
             if halos is not None and len(halos) > 0:
                 dists = np.linalg.norm(halos[:, 1:4] - com_main, axis=1)
-                best_hi = np.argmin(dists)
-                halo_id_main = int(halos[best_hi, 0])
-                mass_label_main = halos[best_hi, 4]
+                halo_id_main    = int(halos[np.argmin(dists), 0])
+                mass_label_main = halos[np.argmin(dists), 4]
 
             main_idx = len(nodes)
             nodes.append({
                 'snap':    snap,
                 'halo_id': halo_id_main,
                 'mass':    mass_label_main,
-                'pos':     com_main / aexp,  # comoving kpc
+                'pos':     com_main / aexp,   # comoving kpc
                 'z':       z,
                 'r200':    r200_main,
                 'is_main': True,
             })
             edges.append((main_idx, desc_idx, 'main'))
-            new_watch.append((main_idx, iord_main, com_main, r200_main))
+            # Pass comoving COM and only the tracked subset (never expand beyond original iord0)
+            new_watch.append((main_idx, new_tracked_main, com_main / aexp, r200_main))
 
-            # --- Secondary progenitors: tracked particles outside the main ball ---
-            # Before merging, a secondary progenitor's particles cluster separately.
-            # Find tracked particles NOT in the main gathered ball.
-            not_in_main = ~np.isin(found_iord, iord_main)
-            sec_found_pos = found_pos[not_in_main]
+            # --- Step 4: secondary progenitors ---
+            # Tracked particles NOT in the main ball are a pre-merger group.
+            not_in_main    = ~np.isin(found_iord, iord_ball)
+            sec_found_pos  = found_pos[not_in_main]
             sec_found_iord = found_iord[not_in_main]
-            if len(sec_found_pos) >= mass_frac_min * len(tracked_iord):
-                com_sec  = np.mean(sec_found_pos, axis=0)
+            # Threshold relative to particles actually found this snapshot
+            if len(sec_found_pos) >= mass_frac_min * n_found:
+                com_sec   = np.mean(sec_found_pos, axis=0)
                 parts_sec = tree_part.query_radius([com_sec], r_search_factor * r200_desc)[0]
-                iord_sec  = iord_snap[parts_sec] if len(parts_sec) > 0 else sec_found_iord
+                iord_sec_ball = iord_snap[parts_sec] if len(parts_sec) > 0 else np.array([], dtype=np.int64)
+                new_tracked_sec = sec_found_iord[np.isin(sec_found_iord, iord_sec_ball)] \
+                    if len(iord_sec_ball) > 0 else sec_found_iord
 
-                mass_sec  = len(iord_sec) * pm_mass
+                mass_sec  = len(iord_sec_ball) * pm_mass if len(iord_sec_ball) > 0 else len(sec_found_iord) * pm_mass
                 r200_sec  = _r200_kpc(mass_sec, params)
 
-                halo_id_sec = -1
+                halo_id_sec    = -1
                 mass_label_sec = mass_sec
                 if halos is not None and len(halos) > 0:
-                    dists_sec = np.linalg.norm(halos[:, 1:4] - com_sec, axis=1)
-                    best_sec = np.argmin(dists_sec)
-                    halo_id_sec = int(halos[best_sec, 0])
-                    mass_label_sec = halos[best_sec, 4]
+                    dists_sec   = np.linalg.norm(halos[:, 1:4] - com_sec, axis=1)
+                    halo_id_sec    = int(halos[np.argmin(dists_sec), 0])
+                    mass_label_sec = halos[np.argmin(dists_sec), 4]
 
                 sec_idx = len(nodes)
                 nodes.append({
                     'snap':    snap,
                     'halo_id': halo_id_sec,
                     'mass':    mass_label_sec,
-                    'pos':     com_sec / aexp,  # comoving kpc
+                    'pos':     com_sec / aexp,   # comoving kpc
                     'z':       z,
                     'r200':    r200_sec,
                     'is_main': False,
                 })
                 edges.append((sec_idx, desc_idx, 'merger'))
-                new_watch.append((sec_idx, iord_sec, com_sec, r200_sec))
+                new_watch.append((sec_idx, new_tracked_sec, com_sec / aexp, r200_sec))
 
         watch_list = new_watch
 
