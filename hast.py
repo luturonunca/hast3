@@ -532,6 +532,237 @@ def find_galaxy(data,radius,min_mass,max_mass):
     del tree
     return ok,res
 
+def _read_info_params(output_dir):
+    """Read aexp, unit_l, unit_d, boxlen, H0, omega_m, omega_l from info_*.txt.
+    Fast text read — does not load particle data."""
+    files = glob.glob(output_dir + '/info_?????.txt')
+    if not files:
+        return {}
+    params = {}
+    want = {'aexp', 'unit_l', 'unit_d', 'boxlen', 'H0', 'omega_m', 'omega_l'}
+    with open(files[0], 'r') as f:
+        for line in f:
+            if '=' in line:
+                key, _, val = line.partition('=')
+                key = key.strip()
+                if key in want:
+                    try:
+                        params[key] = float(val.strip())
+                    except ValueError:
+                        pass
+    return params
+
+
+def _top_halos_kpc_msol(output_dir, params):
+    """Read top-level halos from halo_*.txt (falls back to clump_*.txt).
+    Returns (N,5) array: [index, x_kpc, y_kpc, z_kpc, mass_msol].
+    Returns None if no files are found."""
+    _kpc   = 3.085677581e21   # cm per kpc
+    _msol  = 1.9885e33        # g per Msol
+    unit_l = params.get('unit_l', _kpc)
+    unit_d = params.get('unit_d', 1.0)
+    boxlen = params.get('boxlen', 1.0)
+    to_kpc  = unit_l / _kpc          # 1 code length -> kpc
+    to_msol = unit_d * unit_l**3 / _msol   # 1 code mass -> Msol
+
+    files = glob.glob(output_dir + '/halo_?????.txt?????')
+    use_halo = len(files) > 0
+    if not use_halo:
+        files = glob.glob(output_dir + '/clump_?????.txt?????')
+    if not files:
+        return None
+
+    chunks = []
+    for f in files:
+        try:
+            data = np.loadtxt(f, skiprows=1)
+        except Exception:
+            continue
+        if data.ndim == 1:
+            data = data.reshape(1, -1)
+        if data.size == 0:
+            continue
+        chunks.append(data)
+    if not chunks:
+        return None
+    data_all = np.vstack(chunks)
+
+    if use_halo:
+        # halo file cols: index(0) ncell(1) x(2) y(3) z(4) rho+(5) mass(6)
+        idx = data_all[:, 0]
+        pos = data_all[:, 2:5]
+        m   = data_all[:, 6]
+    else:
+        # clump file cols: index(0) lev(1) parent(2) ncell(3) x(4) y(5) z(6) ... mass(10)
+        # top-level: parent == index
+        top = data_all[:, 2] == data_all[:, 0]
+        if not np.any(top):
+            return None
+        data_all = data_all[top]
+        idx = data_all[:, 0]
+        pos = data_all[:, 4:7]
+        m   = data_all[:, 10]
+
+    # positions: normalise to [0,1] then convert to kpc
+    if np.max(pos) > 1.5:
+        pos = pos / boxlen
+    pos_kpc = pos * boxlen * to_kpc
+    m_msol  = m * to_msol
+
+    return np.column_stack([idx, pos_kpc, m_msol])
+
+
+def _r200_kpc(mass_msol, params):
+    """Estimate R200 in kpc from halo mass in Msol using critical density at snapshot z."""
+    H0   = params.get('H0',      70.0)
+    aexp = params.get('aexp',     1.0)
+    om   = params.get('omega_m',  0.3)
+    ol   = params.get('omega_l',  0.7)
+    z    = 1.0 / aexp - 1.0
+    Hz   = H0 * np.sqrt(om * (1.0 + z)**3 + ol)  # km/s/Mpc
+    Hz_si = Hz * 1e3 / 3.085677581e22             # 1/s
+    G_si  = 6.674e-11                             # m^3 kg^-1 s^-2
+    rho_crit_si  = 3.0 * Hz_si**2 / (8.0 * np.pi * G_si)  # kg/m^3
+    rho_crit_cgs = rho_crit_si * 1e-3 / 1e-6              # g/cm^3
+    _kpc  = 3.085677581e21
+    _msol = 1.9885e33
+    rho_crit_msol_kpc3 = rho_crit_cgs * _kpc**3 / _msol
+    return (3.0 * mass_msol / (4.0 * np.pi * 200.0 * rho_crit_msol_kpc3))**(1.0 / 3.0)
+
+
+def build_merger_tree(sim_dir, halo_id, output_zlast, output_zinit,
+                      mass_frac_min=0.1, r_search_factor=2.0):
+    """Build a merger tree for a given halo by backward snapshot traversal.
+
+    Reads halo_*.txt files (or clump_*.txt top-level entries as fallback) at
+    each snapshot between output_zinit and output_zlast. No particle data is
+    loaded — all unit conversions use the info_*.txt file.
+
+    Parameters
+    ----------
+    sim_dir : str
+        Directory containing all output_XXXXX subdirectories.
+    halo_id : int
+        Halo index at output_zlast (matches the index column in halo/clump files).
+    output_zlast : str
+        Path to the last (low-z) output directory.
+    output_zinit : str
+        Path to the first (high-z) output directory; traversal stops here.
+    mass_frac_min : float
+        Minimum progenitor mass as a fraction of the tracked halo mass.
+        Progenitors below this threshold are ignored as secondary branches.
+    r_search_factor : float
+        Search radius expressed in units of the tracked halo R200.
+
+    Returns
+    -------
+    nodes : list of dict
+        One entry per halo found. Keys: snap (str), halo_id (int),
+        mass (Msol), pos (kpc ndarray), z (float), r200 (kpc), is_main (bool).
+    edges : list of tuple
+        (progenitor_node_idx, descendant_node_idx, kind) where kind is
+        'main' or 'merger'.
+    """
+    def _snap_num(path):
+        return int(os.path.basename(path).split('_')[1])
+
+    n_zinit = _snap_num(output_zinit)
+    n_zlast = _snap_num(output_zlast)
+    all_snaps = sorted(glob.glob(os.path.join(sim_dir, 'output_?????')))
+    snaps = [s for s in all_snaps if n_zinit <= _snap_num(s) <= n_zlast]
+    snaps = snaps[::-1]  # newest first
+
+    nodes = []
+    edges = []
+
+    # --- Root node at output_zlast ---
+    params0 = _read_info_params(output_zlast)
+    halos0  = _top_halos_kpc_msol(output_zlast, params0)
+    if halos0 is None:
+        print('[build_merger_tree] No halo files at {0}'.format(output_zlast))
+        return [], []
+    row0 = halos0[halos0[:, 0] == halo_id]
+    if len(row0) == 0:
+        print('[build_merger_tree] halo_id {0} not found at {1}'.format(halo_id, output_zlast))
+        return [], []
+    row0   = row0[0]
+    r200_0 = _r200_kpc(row0[4], params0)
+    nodes.append({
+        'snap':    output_zlast,
+        'halo_id': int(row0[0]),
+        'mass':    row0[4],
+        'pos':     row0[1:4],
+        'z':       1.0 / params0['aexp'] - 1.0,
+        'r200':    r200_0,
+        'is_main': True,
+    })
+
+    # watch_list: (node_idx, pos_kpc, mass_msol, r200_kpc)
+    watch_list = [(0, row0[1:4], row0[4], r200_0)]
+
+    # --- Backward traversal ---
+    for snap in snaps[1:]:
+        if not watch_list:
+            break
+        params = _read_info_params(snap)
+        halos  = _top_halos_kpc_msol(snap, params)
+        if halos is None:
+            continue
+        z = 1.0 / params['aexp'] - 1.0
+        tree = KDTree(halos[:, 1:4])
+
+        new_watch = []
+        for (desc_idx, pos, mass, r200) in watch_list:
+            hits = tree.query_radius([pos], r_search_factor * r200)[0]
+            if len(hits) == 0:
+                continue
+            candidates  = halos[hits]
+            mass_ratios = candidates[:, 4] / mass
+
+            # main progenitor: best mass continuity
+            best     = hits[np.argmin(np.abs(mass_ratios - 1.0))]
+            main_row = halos[best]
+            main_r200 = _r200_kpc(main_row[4], params)
+            main_idx  = len(nodes)
+            nodes.append({
+                'snap':    snap,
+                'halo_id': int(main_row[0]),
+                'mass':    main_row[4],
+                'pos':     main_row[1:4],
+                'z':       z,
+                'r200':    main_r200,
+                'is_main': True,
+            })
+            edges.append((main_idx, desc_idx, 'main'))
+            new_watch.append((main_idx, main_row[1:4], main_row[4], main_r200))
+
+            # secondary progenitors: other halos in radius above mass threshold
+            min_mass = mass_frac_min * mass
+            for gi in hits:
+                if gi == best:
+                    continue
+                if halos[gi, 4] < min_mass:
+                    continue
+                sec_row  = halos[gi]
+                sec_r200 = _r200_kpc(sec_row[4], params)
+                sec_idx  = len(nodes)
+                nodes.append({
+                    'snap':    snap,
+                    'halo_id': int(sec_row[0]),
+                    'mass':    sec_row[4],
+                    'pos':     sec_row[1:4],
+                    'z':       z,
+                    'r200':    sec_r200,
+                    'is_main': False,
+                })
+                edges.append((sec_idx, desc_idx, 'merger'))
+                new_watch.append((sec_idx, sec_row[1:4], sec_row[4], sec_r200))
+
+        watch_list = new_watch
+
+    return nodes, edges
+
+
 def select(config_file):
     __version()
     p = config_selection_obj()
