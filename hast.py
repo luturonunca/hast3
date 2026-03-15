@@ -693,6 +693,7 @@ def select(config_file):
         hull_halo_idx = []
         hull_m_ratio = []
         hull_n_neighbors = []
+        hull_safety = []
         if(p.plot or p.full_analysis):
             cp = halo_colors
             ax=plot_candidates(d[candidates[0][wh1][m200_mask],:],sim_zlast,comoving=True)
@@ -761,6 +762,7 @@ def select(config_file):
                 hull_halo_idx.append(color_idx_map[i])
                 hull_m_ratio.append(mass_region/m200)
                 hull_n_neighbors.append(len(neighbors[wh1[0][i]]))
+                hull_safety.append(safety)
             if((p.plot or p.full_analysis)and(p.plot_traceback)):
                 proj =[['y','x'],['z','x']]
                 dproj =[[5,4],[6,4]]
@@ -810,6 +812,8 @@ def select(config_file):
                     c  = halo_colors[hull_halo_idx[k]]
                     lbl = str(hull_halo_idx[k]+1)
                     ax_s0.scatter(hull_vols[k],hull_dens_vals[k],color=c,s=100,zorder=5)
+                    if hull_safety[k]:
+                        ax_s0.scatter(hull_vols[k],hull_dens_vals[k],s=300,facecolors='none',edgecolors='red',linewidths=2,zorder=6)
                     ax_s0.annotate(lbl,(hull_vols[k],hull_dens_vals[k]),
                                    textcoords='offset points',xytext=(6,4),color=c)
                     ax_s1.scatter(hull_n_neighbors[k],hull_m_ratio[k],color=c,s=100,zorder=5)
@@ -820,6 +824,9 @@ def select(config_file):
                 ax_s0.set_xlabel('Lagrangian volume [kpc$^3$]')
                 ax_s0.set_ylabel('Lagrangian density [M$_\\odot$ kpc$^{-3}$]')
                 ax_s0.set_title('Lagrangian region')
+                if any(hull_safety):
+                    ax_s0.scatter([],[],s=150,facecolors='none',edgecolors='red',linewidths=2,label='> half box (MUSIC risk)')
+                    ax_s0.legend(fontsize=9)
                 ax_s1.set_xlabel('Number of neighbours')
                 ax_s1.set_ylabel('$m_\\mathrm{region}\\,/\\,m_{200}$')
                 ax_s1.set_title('Environment')
