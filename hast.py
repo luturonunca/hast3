@@ -131,7 +131,7 @@ class config_selection_obj():
         try:
             self.neighb_mass_frac = config.getfloat('selection','neighb_mass_frac')
         except:
-            self.neighb_mass_frac = 0.1
+            self.neighb_mass_frac = 0.3
 
 
 # ---------------------------------------------------------------------
