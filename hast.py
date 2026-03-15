@@ -15,6 +15,7 @@ import matplotlib.pyplot as pyplot
 from matplotlib.backends.backend_pdf import PdfPages
 from scipy.spatial import ConvexHull
 from sklearn.neighbors import KDTree
+from numpy.polynomial.polynomial import polyfit
 
 warnings.filterwarnings("ignore")
 
@@ -804,7 +805,7 @@ def select(config_file):
             pdf = PdfPages(p.fname+'_analysis.pdf')
             pdf.savefig(ax[0].get_figure(),dpi=100)
             if(len(hull_vols)>0):
-                fig_scatter,(ax_s0,ax_s1) = pyplot.subplots(1,2,figsize=(14,6))
+                fig_scatter,(ax_s0,ax_s1) = pyplot.subplots(1,2,figsize=(18,8))
                 for k in range(len(hull_vols)):
                     c  = halo_colors[hull_halo_idx[k]]
                     lbl = str(hull_halo_idx[k]+1)
@@ -834,3 +835,528 @@ def select(config_file):
         return
 
     return
+
+
+class config_decontamination_obj():
+    def parse_input(self, ConfigFile):
+        config = configparser.SafeConfigParser()
+        config.read(ConfigFile)
+
+        self.output_zinit = config.get('decontamination','output_zinit')
+        self.output_zlast = config.get('decontamination','output_zlast')
+        self.rbuffer = config.getfloat('decontamination','rbuffer')
+        try:
+            self.rexclude = config.getfloat('decontamination','rexclude')
+        except:
+            self.rexclude = 10.
+        self.output_dir = config.get('decontamination','output_dir')
+        try:
+            self.rvir = config.getfloat('decontamination','rvir')
+        except:
+            self.rvir = 1.0
+        try:
+            self.rvir_track = config.getfloat('decontamination','rvir_track')
+        except:
+            self.rvir_track = 0.25
+        try:
+            self.rvir_search = config.getfloat('decontamination','rvir_search')
+        except:
+            self.rvir_search = 5.0
+        try:
+            self.aexp_min = config.getfloat('decontamination','aexp_min')
+        except:
+            self.aexp_min = 0.0
+        self.fname = config.get('decontamination','fname')
+        try:
+            halo_coords_str = config.get('decontamination','halo_coords')
+            self.halo_coords = (np.array(re.split(',|;',''.join(halo_coords_str.split())))).astype(float)
+        except:
+            self.halo_coords = np.array([-1.0,-1.0,-1.0])
+        try:
+            self.halo_num = config.getint('decontamination','halo_num')
+        except:
+            self.halo_num = 1
+        try:
+            self.plot = config.getboolean('decontamination','plot')
+        except:
+            self.plot = True
+        try:
+            self.tree_nleaves = config.getint('decontamination','tree_nleaves')
+        except:
+            self.tree_nleaves = 100
+        try:
+            ps_str = config.get('decontamination','point_shift')
+            self.ps = (np.array(re.split(',|;',''.join(ps_str.split())))).astype(int)
+        except:
+            self.ps = np.array([0,0,0]).astype(int)
+        try:
+            self.pslmin = config.getint('decontamination','point_shift_lmin')
+        except:
+            self.pslmin = 1
+        try:
+            self.halo_cutoff = config.getfloat('decontamination','halo_cutoff')
+        except:
+            self.halo_cutoff = 1e3
+        try:
+            self.halo_massfrac = config.getfloat('decontamination','halo_massfrac')
+        except:
+            self.halo_massfrac = 0.10
+        try:
+            self.rank_function = config.get('decontamination','rank_function')
+        except:
+            self.rank_function = 'mass'
+
+
+def __halo_list_tracking(output,conf):
+    list = glob.glob(output+'/clump_?????.txt?????')
+    fmt = _clump_header_format(list[0]) if len(list) > 0 else "legacy"
+    i=0
+    for file in list:
+        data = np.loadtxt(file,skiprows=1,dtype=None)
+        if(np.size(data)==0):
+            continue
+        if(i>0):
+            data_all = np.vstack((data_all,data))
+        else:
+            data_all = data
+        i=i+1
+    data_all = _normalize_clump_columns(data_all, fmt)
+    if(conf.rank_function == 'mass'):
+        c = data_all[:,10]
+    elif(conf.rank_function == 'ncell'):
+        c = data_all[:,3]
+    elif(conf.rank_function == 'rho_max'):
+        c = data_all[:,8]
+    elif(conf.rank_function == 'rho_ave'):
+        c = data_all[:,9]
+    elif(conf.rank_function == 'mass_rho'):
+        c = (1e4*data_all[:,3]/np.max(data_all[:,3]))*(data_all[:,8]/np.max(data_all[:,8]))
+    else:
+        c = data_all[:,10]
+    sorted = np.argsort(c)
+    data_sorted = data_all[sorted]
+    data_sorted = data_sorted[::-1]
+    d = _load_sim(output)
+    # Convert clump positions from code units (0..1) to kpc when needed.
+    try:
+        boxsize_kpc = float(d.properties['boxsize'].in_units('kpc'))
+    except Exception:
+        boxsize_kpc = None
+    if boxsize_kpc is not None:
+        if np.max(data_sorted[:,4:7]) <= 1.0:
+            data_sorted[:,4:7] *= boxsize_kpc
+    return data_sorted
+
+
+def decontaminate(config_file):
+    __version()
+    p = config_decontamination_obj()
+    print('| ------------------------------------------------------------')
+    print('| HAST - decontaminate it')
+    print('| ------------------------------------------------------------')
+    try:
+        p.parse_input(config_file)
+    except:
+        print('[Error] {0} file specified cannot be read'.format(config_file))
+        sys.exit()
+
+    # Find max output number
+    max_out = int(max(glob.glob(p.output_dir+'/output_?????')).split('_')[-1])
+    list = sorted(glob.glob(p.output_dir+'/output_?????'))
+    nfiles = len(list)
+
+    # Music point shift
+    shift = p.ps/2.0**p.pslmin
+
+    # Init
+    aexp = np.zeros(max_out)
+    x = np.zeros(max_out)
+    y = np.zeros(max_out)
+    z = np.zeros(max_out)
+    m = np.zeros(max_out)
+    mnt = np.zeros(max_out)
+    mnm = np.zeros(max_out)
+    n = np.zeros(max_out)
+    idf = np.zeros(max_out)
+
+    region_all_zoom = np.array([]).astype(int)
+    ncoarse_in_rtb_all = 0
+
+    print('| Search radius     = {0:.2f}*R200'.format(p.rvir_search))
+    print('| Traceback radius  = {0:.2f}*R200'.format(p.rvir))
+    print('| Halo cut off mass = {0:.2e} Msol'.format(p.halo_cutoff))
+    print('| Halo min massfrac = {0:.2e} Msol'.format(p.halo_massfrac))
+    print('| Point shift       = {0}'.format(shift))
+    print('| ------------------------------------------------------------')
+    try:
+        print(list[0])
+        sim_zinit = _load_sim(list[0])
+        sim_zinit = sim_zinit[np.argsort(sim_zinit['iord'])]
+    except IOError:
+        print('[Error] {0} file specified cannot be read'.format(p.output_zinit))
+        sys.exit()
+
+    # Get positions of most massive halo from PHEW halo catalogues
+    k = nfiles
+    for j in range(nfiles, -1, -1):
+        print('| '+p.output_dir+'/output_{j:05d}/clump_{j:05d}.txt?????'.format(j=j))
+        print('| ------------------------------------------------------------')
+        if not os.path.exists(p.output_dir+'/output_{j:05d}/clump_{j:05d}.txt00001'.format(j=j)):
+            print('| clump_{j:05d}.txt????? not found'.format(j=j))
+            continue
+        else:
+            try:
+                hl = __halo_list_tracking(list[j-1],p)
+                # Find halo with the largest number of cells (i.e. zoomed halo)
+                hl = hl[np.flipud(hl[:,3].argsort())]
+            except:
+                print('| No haloes found in PHEW outputs')
+                break
+            if(len(hl)==0):
+                print('| No haloes found in PHEW outputs')
+                continue
+
+            if(j==nfiles):
+                if((p.halo_coords[0]>0.) & (p.halo_coords[1]>0.) & (p.halo_coords[2]>0.)):
+                    dist_halo = np.sqrt(np.power(hl[:,4]-p.halo_coords[0],2)+np.power(hl[:,5]-p.halo_coords[1],2)+np.power(hl[:,6]-p.halo_coords[2],2))
+                    # Selected halo is the closest coordinate
+                    id = np.argmin(dist_halo)
+                else:
+                    id = p.halo_num-1
+                    print('| Selecting halo ranked ',p.halo_num,' with ',int(hl[id,3]),' cells')
+            # Build tree for halos (positions in kpc)
+            tree_halo = KDTree(np.squeeze((hl[:,4:7])),leaf_size=p.tree_nleaves)
+            diff = k-j+1
+            if(j<nfiles):
+                # Save previous snapshot
+                sim_prev = sim_curr
+                tree_part_prev = tree_part_curr
+                _box_kpc_prev = _box_kpc_curr
+                # Find halos matching coordinate filter around previous halo
+                # x[k],y[k],z[k] stored in code units; convert to kpc for tree query
+                halo_candidates = tree_halo.query_radius([x[k]*_box_kpc_prev,y[k]*_box_kpc_prev,z[k]*_box_kpc_prev],p.rvir_search*r200_start)[0]
+                # Load current snapshot
+                sim_curr = _load_sim(list[j-1])
+                sim_curr = sim_curr[np.argsort(sim_curr['iord'])]
+                aexp_curr = float(sim_curr.properties['a'])
+                _box_kpc_curr = float(sim_curr.properties['boxsize'].in_units('kpc'))
+                to_msol = float(np.sum(sim_curr['mass'].in_units('Msol')))
+                mass_cutoff = max(p.halo_cutoff/to_msol,p.halo_massfrac*mass_curr)
+                # Filter low mass halos
+                halo_candidates = halo_candidates[hl[halo_candidates,10]>mass_cutoff]
+                if(len(halo_candidates)==0):
+                    print('| No halos found')
+                    print('| Tracking stopped at aexp={0}'.format(aexp_curr))
+                    break
+                # Gather particles in the previous selected halo (r200_start in kpc)
+                halo_part_prev = tree_part_prev.query_radius([x[k]*_box_kpc_prev,y[k]*_box_kpc_prev,z[k]*_box_kpc_prev],p.rvir_track*r200_start)[0]
+                # Build tree for particles
+                print('|    | npart tree               = {0:9d} ------------------'.format(len(sim_curr)))
+                tree_part_curr = KDTree(np.squeeze((sim_curr['pos'])),leaf_size=p.tree_nleaves)
+                print('|    | Previous halo population = {0:7d} --------------------'.format(len(halo_candidates)))
+                print('|    | Cutoff mass              = {0:4.2e} -------------------'.format(mass_cutoff*to_msol))
+
+                ids_frac = np.zeros(len(halo_candidates))
+                ii = 0
+                for halo in halo_candidates:
+                    # Compute R200 in kpc from clump mass (code fraction units)
+                    r200_candidate = (hl[halo,10]*3./(200.*4.*math.pi))**(1.0/3.0) * _box_kpc_curr
+                    # Gather particles of the halo to track
+                    halo_part_curr = tree_part_curr.query_radius(hl[halo,4:7],p.rvir_track*r200_candidate)[0]
+                    # Match unique indices
+                    matching_ids = np.where(np.in1d(sim_curr['iord'][halo_part_curr],sim_prev['iord'][halo_part_prev]))[0]
+                    # Matching indices fraction
+                    ids_frac[ii] = float(len(matching_ids))/float(len(halo_part_prev))
+                    ii += 1
+                    print('|    |         halo {0:7d} | idf={1:5.2f}% | m={2:5.2e} Msol'.format(halo,100*ids_frac[ii-1],hl[halo,10]*to_msol))
+                # Selecting best candidate
+                best_candidate = np.argmax(ids_frac)
+                id = halo_candidates[best_candidate]
+                halo_rejected = np.delete(halo_candidates,best_candidate)
+                # Computing Virial radius of the best candidate (in kpc)
+                _pos_curr  = np.array(sim_curr['pos'])
+                _mass_curr = np.array(sim_curr['mass'].in_units('Msol'))
+                try:
+                    r200_curr = _virial_radius(_pos_curr,_mass_curr,_box_kpc_curr,hl[id,4:7],p.rvir_search*r200_curr)
+                except:
+                    print('| [Warning] Virial radius computation did not converge')
+                    r200_curr = (hl[id,10]*3./(200.*4.*math.pi))**(1.0/3.0) * _box_kpc_curr
+                mass_curr = hl[id,10]
+                print('|    |    -->  halo {0:7d} selected'.format(id))
+                print('| ------------------------------------------------------------')
+
+            # Final snapshot - starting point
+            else:
+                print('| Closest halo coordinates  = [{0:.5f},{1:.5f},{2:.5f}] kpc'.format(hl[id,4],hl[id,5],hl[id,6]))
+                if((p.halo_coords[0]>0.) & (p.halo_coords[1]>0.) & (p.halo_coords[2]>0.)):
+                    print('| Relative distance         = {0:.2e} kpc'.format(np.min(dist_halo)))
+                # Loading first snapshot
+                sim_curr = _load_sim(list[j-1])
+                aexp_curr = float(sim_curr.properties['a'])
+                _box_kpc_curr = float(sim_curr.properties['boxsize'].in_units('kpc'))
+                # Computing virial radius (in kpc)
+                _pos_curr  = np.array(sim_curr['pos'])
+                _mass_curr = np.array(sim_curr['mass'].in_units('Msol'))
+                r200_start = _virial_radius(_pos_curr,_mass_curr,_box_kpc_curr,hl[id,4:7],0.5*_box_kpc_curr)
+                r200_curr = r200_start
+                mass_curr = hl[id,10]
+                id_start = id
+                to_msol = float(np.sum(sim_curr['mass'].in_units('Msol')))
+                print('| R200                      = {0:.4f} kpc'.format(r200_start))
+                print('| M200                      = {0:.2e} Msol'.format(hl[id,10]*to_msol))
+                print('| coords                    = {0} kpc'.format(hl[id,4:7]))
+                sim_curr = sim_curr[np.argsort(sim_curr['iord'])]
+                tree_part_curr = KDTree(np.squeeze((sim_curr['pos'])),leaf_size=p.tree_nleaves)
+                print('| ------------------------------------------------------------')
+                ids_frac = 1.0
+                # Find halos matching coordinate filter around previous halo
+                halo_candidates = tree_halo.query_radius(np.squeeze(hl[id,4:7]),p.rvir_search*r200_curr)[0]
+                # Filter low mass halos
+                halo_candidates = halo_candidates[hl[halo_candidates,10]*to_msol>p.halo_cutoff]
+                # Selected halo
+                best_candidate = np.where(halo_candidates==id)[0]
+                halo_rejected = np.delete(halo_candidates,best_candidate)
+
+            # Code to physical units (kept for printing; positions already in kpc)
+            to_mpc = sim_curr.properties['boxsize'].in_units('Mpc')*sim_curr.properties['h']
+            to_kpc = 1e3*to_mpc
+            # Code to comoving units
+            to_mpc_comov = sim_curr.properties['boxsize'].in_units('Mpc')*sim_curr.properties['h']/sim_curr.properties['a']
+            to_kpc_comov = 1e3*to_mpc_comov
+            # Find zoomed particles
+            zoom_part = np.where(sim_curr['mass']<1.1*np.min(sim_curr['mass']))
+            # Find coarse particles
+            coarse_part = np.where(sim_curr['mass']>1.1*np.min(sim_curr['mass']))
+            # Look for particles contaminating the zoom region
+            tree = KDTree(np.squeeze((sim_curr['pos'])),leaf_size=p.tree_nleaves)
+            virial_curr = tree_part_curr.query_radius(hl[id,4:7].reshape(1,-1),r200_curr)[0]
+            region_curr = tree_part_curr.query_radius(hl[id,4:7].reshape(1,-1),p.rvir*r200_curr)[0]
+            # Include all the zoom particles
+            region_curr_zoom = np.unique(np.append(zoom_part,region_curr))
+            region_all_zoom = np.unique(np.append(region_all_zoom,region_curr_zoom))
+            m200 = float(np.sum(sim_curr['mass'][virial_curr].in_units('Msol')))
+            mass_candidate = hl[id,10]
+            coarse_in_rtb = np.where(sim_curr['mass'][region_curr]>1.1*np.min(sim_curr['mass']))
+            ncoarse_in_rtb_all += len(coarse_in_rtb[0])
+            coarse_in_r200 = np.where(sim_curr['mass'][virial_curr]>1.1*np.min(sim_curr['mass']))
+            # r200_curr is already in kpc; comoving = physical/aexp
+            print('| R200                      = {0:.1f} kpc physical / {1:.1f} kpc comoving'.format(r200_curr,r200_curr/aexp_curr))
+            print('| M200                      = {0:.2e} Msol'.format(m200))
+            print('| M_clump                   = {0:.2e} Msol'.format(mass_candidate*to_msol))
+            print('| position                  = [{0:.4f},{1:.4f},{2:.4f}] kpc'.format(hl[id,4],hl[id,5],hl[id,6]))
+            print('| ------------------------------------------------------------')
+            print('| npart_tot(r<R200)         = {1}'.format(p.rvir,len(virial_curr)))
+            print('| npart_tot(r<{0}*R200)     = {1}'.format(p.rvir,len(region_curr)))
+            print('| npart_coarse(r<{0}*R200)  = {1}'.format(p.rvir,len(coarse_in_rtb[0])))
+            print('| npart_coarse_all          = {0}'.format(ncoarse_in_rtb_all))
+            print('| contamination(r<{0}*R200) = {1:.1f}%'.format(p.rvir,100*float(np.sum(sim_curr['mass'][region_curr][coarse_in_rtb]))/float(np.sum(sim_curr['mass'][region_curr]))))
+            print('| npart_zoom                = {0}'.format(len(zoom_part[0])))
+            print('| npart_tot                 = {0}'.format(len(sim_curr)))
+            # Get unique indices
+            ind_curr = sim_zinit['iord'][region_all_zoom]
+            # Trace indices back in the initial output
+            region_zinit = np.searchsorted(sim_zinit['iord'],ind_curr,side='left')
+            # Find coarse particles in the zoom region at z_init
+            coarse_in_rtb_init = np.where(sim_zinit['mass'][region_zinit]>1.1*np.min(sim_zinit['mass']))
+            # Find zoom particles at z_init
+            zoom_in_rtb_init = np.where(sim_zinit['mass'][region_zinit]<1.1*np.min(sim_zinit['mass']))
+            zoom_init = np.where(sim_zinit['mass']<1.1*np.min(sim_zinit['mass']))
+            # Computing center of the zoom particles in z_init
+            zinit_center = [
+                np.average(sim_zinit['x'][region_zinit][zoom_in_rtb_init]),
+                np.average(sim_zinit['y'][region_zinit][zoom_in_rtb_init]),
+                np.average(sim_zinit['z'][region_zinit][zoom_in_rtb_init])]
+            # Compute centered positions and radii at z_init
+            # (replaces pynbody in-place sim['pos'] centering + sim['r'])
+            pos_zinit_cen = np.array(sim_zinit['pos']) - np.array(zinit_center)
+            r_zinit = np.linalg.norm(pos_zinit_cen, axis=1)
+            allowed = np.where((r_zinit[region_zinit]<p.rexclude)|(sim_zinit['mass'][region_zinit]<1.1*np.min(sim_zinit['mass'])))
+            not_allowed = np.where((r_zinit[region_zinit]>=p.rexclude)&(sim_zinit['mass'][region_zinit]>1.1*np.min(sim_zinit['mass'])))
+            print('| Included coarse part      = {0}'.format(len(allowed[0])))
+            print('| Excluded coarse part      = {0}'.format(len(not_allowed[0])))
+            if(len(coarse_in_rtb_init)>0):
+                try:
+                    # Compute centered positions and radii at curr snapshot
+                    # (replaces pynbody in-place sim['pos'] centering + sim['r'])
+                    pos_curr_cen = np.array(sim_curr['pos']) - hl[id,4:7]
+                    r_curr = np.linalg.norm(pos_curr_cen, axis=1)
+                    print('| r_min coarse part/R200    = {0:.3e}'.format(float(np.min(r_curr[region_curr][coarse_in_rtb]))/r200_curr))
+                    print('| r_mean coarse part/R200   = {0:.3e}'.format(float(np.mean(r_curr[region_curr][coarse_in_rtb]))/r200_curr))
+                except:
+                    pass
+                # Computing convex hulls volumes
+                hull = ConvexHull(np.array(sim_zinit['pos'])[region_zinit][allowed])
+                hull_zoom = ConvexHull(np.array(sim_zinit['pos'])[zoom_init])
+                print('| Convex Hull coarse part -> vol={0:.3e} dens={1:.3e}'.format(hull.volume,float(np.sum(sim_zinit['mass'][region_zinit][allowed])/hull.volume)))
+                print('| Convex Hull zoom part   -> vol={0:.3e} dens={1:.3e}'.format(hull_zoom.volume,float(np.sum(sim_zinit['mass'][zoom_init])/hull_zoom.volume)))
+                print('| Volume increase         -> {0:.2f}%'.format(100*(hull.volume/hull_zoom.volume)-100.))
+
+            if((np.max(ids_frac)>0.01)&(aexp_curr>p.aexp_min)):
+                # Store position in code units (0..1) for RAMSES polynomial fit
+                x[j-1] = hl[id,4] / _box_kpc_curr
+                y[j-1] = hl[id,5] / _box_kpc_curr
+                z[j-1] = hl[id,6] / _box_kpc_curr
+                m[j-1] = hl[id,10]*to_msol
+                n[j-1] = hl[id,3]
+                if(len(halo_rejected)>0):
+                    mnt[j-1] = np.sum(hl[halo_rejected,10])*to_msol
+                    mnm[j-1] = np.max(hl[halo_rejected,10])*to_msol
+                else:
+                    mnt[j-1] = 0.0
+                    mnm[j-1] = 0.0
+                    idf[j-1] = np.max(ids_frac)
+                aexp[j-1] = aexp_curr
+                k = j-1
+            else:
+                print('| ------------------------------------------------------------')
+                print('| Tracking stopped at aexp={0}'.format(aexp_curr))
+                break
+
+    print('| ------------------------------------------------------------')
+    if(len(coarse_in_rtb_init)>0):
+        try:
+            np.savetxt((p.fname).strip()+'_part',np.array(sim_zinit['pos'])[region_zinit][allowed][hull.vertices]-shift)
+            print('| Particle list outputed to '+(p.fname).strip())
+        except:
+            print('[Error] Cannot write file '+(p.fname).strip())
+            sys.exit()
+
+        sys.stdout.flush()
+    else:
+        print('| No contamination')
+
+    # Remove NaNs
+    defined = np.where(aexp>0.0)
+    x = x[defined]
+    y = y[defined]
+    z = z[defined]
+    m = m[defined]
+    n = n[defined]
+    mnm = mnm[defined]
+    mnt = mnt[defined]
+    aexp = aexp[defined]
+    idf = idf[defined]
+
+    # Write results (x,y,z in code units 0..1 matching pynbody version)
+    np.savetxt(p.fname+'_track',np.transpose(np.squeeze([aexp,x,y,z,m,n,idf,mnt,mnm])),header="aexp x y z mass npart ids_fraction mass_neighb_max mass_neighb_tot")
+
+    # Fit coefficients
+    cx = polyfit(aexp, x, 3, full=True, w=m)[0]
+    cy = polyfit(aexp, y, 3, full=True, w=m)[0]
+    cz = polyfit(aexp, z, 3, full=True, w=m)[0]
+
+    # Print result
+    print('| ------------------------------------------------------------')
+    print('| RAMSES polynomial coefficients for camera halo tracking')
+    print('| ------------------------------------------------------------')
+    print('| xcentre_frame='+','.join('{:6f}'.format(i) for i in cx))
+    print('| ycentre_frame='+','.join('{:6f}'.format(i) for i in cy))
+    print('| zcentre_frame='+','.join('{:6f}'.format(i) for i in cz))
+
+    # Plotting
+    if p.plot:
+        print('| ------------------------------------------------------------')
+        print('| Plotting')
+        flatui = ["#9b59b6", "#3498db", "#95a5a6", "#e74c3c", "#34495e", "#2ecc71"]
+        cp = sns.color_palette(flatui)
+        sns.set_context('poster')
+        sns.set_style("darkgrid", {"axes.facecolor": ".9"})
+
+        # Plotting tracked coordinates and fitted polynome
+        fig,ax = pyplot.subplots(1)
+        ax.plot(aexp, x, 'o', c=cp[0], ms=5)
+        ax.plot(aexp, cx[0]+cx[1]*aexp+cx[2]*aexp**2+cx[3]*aexp**3, c=cp[0], lw=3, label='x')
+        ax.plot(aexp, y, 'o', c=cp[1], ms=5)
+        ax.plot(aexp, cy[0]+cy[1]*aexp+cy[2]*aexp**2+cy[3]*aexp**3, c=cp[1], lw=3, label='y')
+        ax.plot(aexp, z, 'o', c=cp[2], ms=5)
+        ax.plot(aexp, cz[0]+cz[1]*aexp+cz[2]*aexp**2+cz[3]*aexp**3, c=cp[2], lw=3, label='z')
+        ax.set_xlabel('aexp')
+        ax.set_xlim([0.0,1.0])
+        ax.set_ylim([0.0,1.0])
+        ax.legend()
+        pyplot.savefig(p.fname+".pdf")
+        pyplot.close(fig)
+
+        # Plotting mass evolution
+        fig,ax = pyplot.subplots(1)
+        ax.plot(aexp, np.log10(m), '-', c=cp[0],label='tracked halo')
+        ax.plot(aexp, np.log10(mnm), '-', c=cp[1], label='heaviest companion')
+        ax.plot(aexp, np.log10(mnt), '-', c=cp[2], label='total companion')
+        ax.get_yaxis().get_major_formatter().set_useOffset(False)
+        ax.set_xlim([0.0,1.0])
+        ax.legend()
+        ax.set_xlabel('aexp')
+        ax.set_ylabel(r'Mass [M$_{\odot}$]')
+        pyplot.savefig(p.fname+'_mass.pdf')
+        pyplot.close(fig)
+
+        # Reload last output
+        sim_zlast = _load_sim(list[-1])
+        sim_zlast = sim_zlast[np.argsort(sim_zlast['iord'])]
+        hl = __halo_list_tracking(list[-1],p)
+        # Find zoomed particles
+        zoom_part = np.where(sim_zlast['mass']<1.1*np.min(sim_zlast['mass']))
+        cp = sns.color_palette(flatui)
+        center = [0.,0.,0.]
+        sns.set_style("ticks",{"axes.grid": False,"xtick.direction":'in',"ytick.direction":'in'})
+        fig,ax = pyplot.subplots(1,2,figsize=(16,8))
+        proj =[['x','y'],['x','z']]
+        dproj =[[4,5],[4,6]]
+        for i in range(len(ax)):
+            x=proj[i][0]
+            y=proj[i][1]
+            try:
+                xmin_coarse_in_rtb = float(np.min(sim_zinit[x][region_zinit][coarse_in_rtb_init]))
+                ymin_coarse_in_rtb = float(np.min(sim_zinit[y][region_zinit][coarse_in_rtb_init]))
+                xmax_coarse_in_rtb = float(np.max(sim_zinit[x][region_zinit][coarse_in_rtb_init]))
+                ymax_coarse_in_rtb = float(np.max(sim_zinit[y][region_zinit][coarse_in_rtb_init]))
+            except:
+                xmin_coarse_in_rtb = 1.0
+                ymin_coarse_in_rtb = 1.0
+                xmax_coarse_in_rtb = 0.0
+                ymax_coarse_in_rtb = 0.0
+
+            xmin = min(xmin_coarse_in_rtb,float(np.min(sim_zlast[x][zoom_part])))-0.01
+            ymin = min(ymin_coarse_in_rtb,float(np.min(sim_zlast[y][zoom_part])))-0.01
+            xmax = max(xmax_coarse_in_rtb,float(np.max(sim_zlast[x][zoom_part])))+0.01
+            ymax = max(ymax_coarse_in_rtb,float(np.max(sim_zlast[y][zoom_part])))+0.01
+            pmin = min(xmin,ymin)
+            pmax = max(xmax,ymax)
+            ax[i].set_xlim([pmin,pmax])
+            ax[i].set_ylim([pmin,pmax])
+            ax[i].set_xlabel(x+' [kpc]')
+            ax[i].set_ylabel(y+' [kpc]')
+            im,xedges,yedges = np.histogram2d(sim_zlast[x][zoom_part],sim_zlast[y][zoom_part],
+                weights=np.array(sim_zlast['mass'])[zoom_part],bins=1024,range=[[pmin,pmax],[pmin,pmax]])
+            im = np.rot90(im)
+            # Plotting 2D Convex Hull
+            points_2d = np.squeeze([[np.array(sim_zinit[x])[region_zinit][allowed]],
+                [np.array(sim_zinit[y])[region_zinit][allowed]]]).transpose()
+            hull2d = ConvexHull(points_2d)
+            ax[i].plot(np.array(sim_zinit[x])[region_zinit][allowed][np.append(hull2d.vertices,hull2d.vertices[0])],
+                np.array(sim_zinit[y])[region_zinit][allowed][np.append(hull2d.vertices,hull2d.vertices[0])],
+                'k-',lw=1.,color=cp[5],label='Lagrangian volume')
+            points_2d = np.squeeze([[np.array(sim_zinit[x])[zoom_init]],[np.array(sim_zinit[y])[zoom_init]]]).transpose()
+            hull2d = ConvexHull(points_2d)
+            ax[i].plot(np.array(sim_zinit[x])[zoom_init][np.append(hull2d.vertices,hull2d.vertices[0])],
+                np.array(sim_zinit[y])[zoom_init][np.append(hull2d.vertices,hull2d.vertices[0])],
+                'k-',lw=1.,color=cp[3],label='Lagrangian volume zoom part')
+            # Plot main zoomed halo center
+            h1 = ax[i].scatter(hl[id_start,dproj[i][0]],hl[id_start,dproj[i][1]],c=cp[0],alpha=0.35)
+            h2 = ax[i].scatter(zinit_center[dproj[i][0]-4],zinit_center[dproj[i][1]-4],c=cp[1],alpha=0.35,zorder=10)
+            # Plot R200 circle
+            an = np.linspace(0,2*np.pi,100)
+            ax[i].plot(r200_start*np.cos(an)+hl[id_start,dproj[i][0]],r200_start*np.sin(an)+hl[id_start,dproj[i][1]],color=cp[1],label='R200',lw=1.)
+            ax[i].plot(p.rvir*r200_start*np.cos(an)+hl[id_start,dproj[i][0]],p.rvir*r200_start*np.sin(an)+hl[id_start,dproj[i][1]],color=cp[2],label='Rtb',lw=1.)
+            ax[i].plot(p.rexclude*np.cos(an)+zinit_center[dproj[i][0]-4],p.rexclude*np.sin(an)+zinit_center[dproj[i][1]-4],color='k',label='Rexclude',lw=1.)
+            # Plot contaminating particles
+            if(ncoarse_in_rtb_all>0):
+                points_2d = np.vstack((np.array(sim_zinit[x])[region_zinit][coarse_in_rtb_init],np.array(sim_zinit[y])[region_zinit][coarse_in_rtb_init])).transpose()
+                points_2d = np.round(points_2d*2000.)/2000.
+                unique_points_2d = __unique_rows(points_2d)
+                ax[i].scatter(unique_points_2d[:,0],unique_points_2d[:,1],
+                    c=cp[4],marker='+',s=5,alpha=0.50,linewidth=0.5,label='Contaminating part initial')
+            tv = ax[i].imshow(np.log10(im),cmap='bone_r',interpolation='quadric',aspect='equal',extent=[pmin,pmax,pmin,pmax])
+        ax[0].legend(loc='upper center',frameon=False,bbox_to_anchor=(0.5, 1.10, 1.0, 0.1),ncol=2,markerscale=5.)
+        out=p.fname+'_decontamination.pdf'
+        pyplot.savefig(out,dpi=100)
