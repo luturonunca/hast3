@@ -128,6 +128,10 @@ class config_selection_obj():
             self.music_margin = config.getfloat('selection','music_margin')
         except:
             self.music_margin = 0.1
+        try:
+            self.neighb_mass_frac = config.getfloat('selection','neighb_mass_frac')
+        except:
+            self.neighb_mass_frac = 0.1
 
 
 # ---------------------------------------------------------------------
@@ -794,7 +798,8 @@ def select(config_file):
                 hull_dens_vals.append(float(np.sum(sim_zinit['mass'][region_zinit])/hull.volume))
                 hull_halo_idx.append(color_idx_map[i])
                 hull_m_ratio.append(mass_region/m200)
-                hull_n_neighbors.append(len(neighbors[wh1[0][i]]))
+                neighb_masses = d[neighbors[wh1[0][i]], 10]
+                hull_n_neighbors.append(int(np.sum(neighb_masses > p.neighb_mass_frac * mass_candidate)))
                 hull_safety.append(music_risk)
             if((p.plot or p.full_analysis)and(p.plot_traceback)):
                 proj =[['y','x'],['z','x']]
@@ -860,7 +865,7 @@ def select(config_file):
                 if any(hull_safety):
                     ax_s0.scatter([],[],s=150,facecolors='none',edgecolors='red',linewidths=2,label='> half box (MUSIC risk)')
                     ax_s0.legend(fontsize=9)
-                ax_s1.set_xlabel('Number of neighbours')
+                ax_s1.set_xlabel('N neighbours with $m>{{{0:.0f}}}\%\\,m_{{\\mathrm{{cand}}}}$'.format(p.neighb_mass_frac*100))
                 ax_s1.set_ylabel('$m_\\mathrm{region}\\,/\\,m_{200}$')
                 ax_s1.set_title('Environment')
                 sns.despine()
