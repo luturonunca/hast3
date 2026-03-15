@@ -948,7 +948,8 @@ def build_merger_tree(sim_dir, halo_id, output_zlast, output_zinit,
                     'is_main': False,
                 })
                 edges.append((sec_idx, desc_idx, 'merger'))
-                # Mergers are not added to watch_list — they have joined the main branch
+                # Also trace this branch backward so its full history is built
+                new_watch.append((sec_idx, iord_h, sec_row[1:4], r200_h))
 
         watch_list = new_watch
 
