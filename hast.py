@@ -630,6 +630,121 @@ def _r200_kpc(mass_msol, params):
     return (3.0 * mass_msol / (4.0 * np.pi * 200.0 * rho_crit_msol_kpc3))**(1.0 / 3.0)
 
 
+def _lookback_time_gyr(aexp, params):
+    """Lookback time in Gyr at a given aexp, using flat LCDM from info params."""
+    H0 = params.get('H0', 70.0)
+    om = params.get('omega_m', 0.3)
+    ol = params.get('omega_l', 0.7)
+    H0s = H0 * 1e3 / 3.085677581e22          # 1/s
+    tH  = 1.0 / H0s / 3.15576e16             # Gyr
+    def _t(a):
+        return (2.0 / (3.0 * np.sqrt(ol))) * np.arcsinh(np.sqrt(ol / om) * a**1.5) * tH
+    return _t(1.0) - _t(aexp)                 # lookback = t0 - t(z)
+
+
+def _add_redshift_top_axis(ax, params, z_ticks=(0, 0.5, 1, 2, 3, 5, 7, 10)):
+    """Add a secondary x-axis on top showing redshift values."""
+    ax2 = ax.twiny()
+    ax2.set_xlim(ax.get_xlim())
+    t_ticks, z_labels = [], []
+    for z in z_ticks:
+        a = 1.0 / (1.0 + z)
+        t = _lookback_time_gyr(a, params)
+        x0, x1 = ax.get_xlim()
+        if x0 <= t <= x1:
+            t_ticks.append(t)
+            z_labels.append(str(z))
+    ax2.set_xticks(t_ticks)
+    ax2.set_xticklabels(z_labels, fontsize=8)
+    ax2.set_xlabel('Redshift', fontsize=9)
+    return ax2
+
+
+def plot_merger_tree(nodes, edges, ax_tree, ax_mass, params, halo_label=''):
+    """Plot a merger tree in two panels sharing the same lookback-time x-axis.
+
+    ax_tree : classic horizontal tree — x = lookback time, y = branch layout
+    ax_mass : mass growth — x = lookback time, y = M [Msol] log scale
+
+    Both panels have a secondary top x-axis showing redshift.
+    z=0 is on the left, high-z on the right.
+    """
+    col_main   = '#3182bd'
+    col_merger = '#e6550d'
+
+    if not nodes:
+        for ax in (ax_tree, ax_mass):
+            ax.text(0.5, 0.5, 'No tree data', transform=ax.transAxes, ha='center')
+        return
+
+    # --- Lookback time per node ---
+    t_lb = [_lookback_time_gyr(1.0 / (1.0 + nd['z']), params) for nd in nodes]
+
+    # --- Assign y-positions for tree panel (branch layout) ---
+    y_pos    = [0.0] * len(nodes)
+    _counter = [0]
+
+    def _assign_y(node_idx, y):
+        y_pos[node_idx] = y
+        progs_main   = [p for (p, d, k) in edges if d == node_idx and k == 'main']
+        progs_merger = [p for (p, d, k) in edges if d == node_idx and k == 'merger']
+        if progs_main:
+            _assign_y(progs_main[0], y)
+        for p in progs_merger:
+            _counter[0] += 1
+            _assign_y(p, y + _counter[0])
+
+    _assign_y(0, 0.0)
+
+    # --- Left panel: tree ---
+    for (p_idx, d_idx, kind) in edges:
+        lw  = 2.0 if kind == 'main' else 1.2
+        ls  = '-'  if kind == 'main' else '--'
+        col = col_main if kind == 'main' else col_merger
+        ax_tree.plot([t_lb[p_idx], t_lb[d_idx]],
+                     [y_pos[p_idx], y_pos[d_idx]],
+                     color=col, lw=lw, ls=ls, alpha=0.85, zorder=3)
+
+    m_max = max(nd['mass'] for nd in nodes)
+    for i, nd in enumerate(nodes):
+        col  = col_main if nd['is_main'] else col_merger
+        size = max(30, 300 * nd['mass'] / m_max)
+        ax_tree.scatter(t_lb[i], y_pos[i], s=size, color=col,
+                        edgecolors='k', linewidths=0.5, zorder=5)
+
+    ax_tree.set_xlabel('Lookback time [Gyr]')
+    ax_tree.set_ylabel('Branch')
+    ax_tree.set_yticks([])
+    ax_tree.set_title('Merger tree — halo {0}'.format(halo_label))
+    _add_redshift_top_axis(ax_tree, params)
+    sns.despine(ax=ax_tree, left=True)
+
+    # --- Right panel: mass growth ---
+    main_nodes = sorted([(t_lb[i], nd['mass']) for i, nd in enumerate(nodes)
+                         if nd['is_main']], key=lambda x: x[0])
+    if main_nodes:
+        t_main, m_main = zip(*main_nodes)
+        ax_mass.plot(t_main, m_main, '-o', color=col_main, lw=2, ms=5, label='Main branch')
+
+    for (p_idx, d_idx, kind) in edges:
+        if kind != 'merger':
+            continue
+        t_ev = t_lb[d_idx]
+        m_sec = nodes[p_idx]['mass']
+        m_desc = nodes[d_idx]['mass']
+        ratio = m_sec / m_desc
+        ax_mass.axvline(t_ev, color=col_merger, lw=1.0, ls='--', alpha=0.4)
+        ax_mass.scatter(t_ev, m_sec, s=max(30, 300 * ratio),
+                        color=col_merger, edgecolors='k', linewidths=0.5, zorder=5)
+
+    ax_mass.set_yscale('log')
+    ax_mass.set_xlabel('Lookback time [Gyr]')
+    ax_mass.set_ylabel('$M$ [M$_\\odot$]')
+    ax_mass.set_title('Mass growth')
+    _add_redshift_top_axis(ax_mass, params)
+    sns.despine(ax=ax_mass)
+
+
 def build_merger_tree(sim_dir, halo_id, output_zlast, output_zinit,
                       mass_frac_min=0.1, r_search_factor=2.0):
     """Build a merger tree for a given halo by backward snapshot traversal.
@@ -942,6 +1057,7 @@ def select(config_file):
         hull_vols = []
         hull_dens_vals = []
         hull_halo_idx = []
+        hull_halo_ids = []
         hull_m_ratio = []
         hull_n_neighbors = []
         hull_safety = []
@@ -1028,6 +1144,7 @@ def select(config_file):
                 hull_vols.append(hull.volume)
                 hull_dens_vals.append(float(np.sum(sim_zinit['mass'][region_zinit])/hull.volume))
                 hull_halo_idx.append(color_idx_map[i])
+                hull_halo_ids.append(int(d[candidates[0][wh1[0][i]], 0]))
                 hull_m_ratio.append(mass_region/m200)
                 neighb_masses = d[neighbors[wh1[0][i]], 10]
                 hull_n_neighbors.append(int(np.sum(neighb_masses > p.neighb_mass_frac * mass_candidate)))
@@ -1103,6 +1220,23 @@ def select(config_file):
                 pyplot.tight_layout()
                 pdf.savefig(fig_scatter,dpi=100)
                 pyplot.close(fig_scatter)
+            # Merger trees for candidates without MUSIC risk
+            sim_dir_mt = os.path.dirname(os.path.abspath(p.output_zlast))
+            params_mt  = _read_info_params(p.output_zlast)
+            for k in range(len(hull_vols)):
+                if hull_safety[k]:
+                    continue
+                nodes_mt, edges_mt = build_merger_tree(
+                    sim_dir_mt, hull_halo_ids[k],
+                    p.output_zlast, p.output_zinit)
+                if not nodes_mt:
+                    continue
+                fig_mt, (ax_t, ax_m) = pyplot.subplots(1, 2, figsize=(18, 8))
+                plot_merger_tree(nodes_mt, edges_mt, ax_t, ax_m, params_mt,
+                                 halo_label=str(hull_halo_idx[k]+1))
+                pyplot.tight_layout()
+                pdf.savefig(fig_mt, dpi=100)
+                pyplot.close(fig_mt)
             pdf.close()
             print('| Full analysis saved to {0}_analysis.pdf'.format(p.fname))
 
