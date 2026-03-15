@@ -124,6 +124,10 @@ class config_selection_obj():
             self.padding = config.getint('selection','padding')
         except:
             self.padding = 16
+        try:
+            self.music_margin = config.getfloat('selection','music_margin')
+        except:
+            self.music_margin = 0.05
 
 
 # ---------------------------------------------------------------------
@@ -756,13 +760,14 @@ def select(config_file):
             # error will be triggered. The coarsest levels (low L) are the most restrictive
             # because the padding cells represent a larger fraction of the box there.
             music_risk = False
+            threshold = 0.5 - p.music_margin
             for L in range(p.levelmin+1, p.levelmax+1):
                 cell_frac = 2.0**(-L)
-                if any(e/box_kpc + 2*p.padding*cell_frac > 0.5 for e in extents_kpc):
+                if any(e/box_kpc + 2*p.padding*cell_frac > threshold for e in extents_kpc):
                     music_risk = True
                     break
             if music_risk:
-                print('|     | --- WARNING: padded Lagrangian region may exceed half the box in MUSIC (levelmin={0}, levelmax={1}, padding={2})'.format(p.levelmin,p.levelmax,p.padding))
+                print('|     | --- WARNING: padded Lagrangian region may exceed half the box in MUSIC (levelmin={0}, levelmax={1}, padding={2}, margin={3})'.format(p.levelmin,p.levelmax,p.padding,p.music_margin))
             if(r200[i]>0.):
                 npart_r200 = len(virial_zlast[i])
             else:
