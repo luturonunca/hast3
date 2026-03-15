@@ -127,7 +127,7 @@ class config_selection_obj():
         try:
             self.music_margin = config.getfloat('selection','music_margin')
         except:
-            self.music_margin = 0.05
+            self.music_margin = 0.1
 
 
 # ---------------------------------------------------------------------
