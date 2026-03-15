@@ -112,6 +112,18 @@ class config_selection_obj():
             self.full_analysis = config.getboolean('selection','full_analysis')
         except:
             self.full_analysis = False
+        try:
+            self.levelmin = config.getint('selection','levelmin')
+        except:
+            self.levelmin = 7
+        try:
+            self.levelmax = config.getint('selection','levelmax')
+        except:
+            self.levelmax = 11
+        try:
+            self.padding = config.getint('selection','padding')
+        except:
+            self.padding = 16
 
 
 # ---------------------------------------------------------------------
@@ -725,16 +737,32 @@ def select(config_file):
                 box_kpc = float(sim_zinit.properties['boxsize'].in_units('kpc'))
             except Exception:
                 box_kpc = 1.0
-            if((np.max(sim_zinit['x'][region_zinit])-np.min(sim_zinit['x'][region_zinit]))/box_kpc>0.5):
-                safety = True
-            if((np.max(sim_zinit['y'][region_zinit])-np.min(sim_zinit['y'][region_zinit]))/box_kpc>0.5):
-                safety = True
-            if((np.max(sim_zinit['z'][region_zinit])-np.min(sim_zinit['z'][region_zinit]))/box_kpc>0.5):
+            extents_kpc = [
+                np.max(sim_zinit['x'][region_zinit])-np.min(sim_zinit['x'][region_zinit]),
+                np.max(sim_zinit['y'][region_zinit])-np.min(sim_zinit['y'][region_zinit]),
+                np.max(sim_zinit['z'][region_zinit])-np.min(sim_zinit['z'][region_zinit]),
+            ]
+            if any(e/box_kpc > 0.5 for e in extents_kpc):
                 safety = True
             if(safety):
                 print('|     | --- Traceback region lies in boundaries')
                 print('| ------------------------------------------------------------')
                 continue
+            # MUSIC risk: check whether the padded Lagrangian region would exceed half
+            # the box at any refinement level. At level L, MUSIC adds `padding` cells on
+            # each side of the region; the padded fraction of the box is:
+            #   raw_fraction + 2*padding / 2^L
+            # If this exceeds 0.5 at any level the MUSIC "subgrid larger than half box"
+            # error will be triggered. The coarsest levels (low L) are the most restrictive
+            # because the padding cells represent a larger fraction of the box there.
+            music_risk = False
+            for L in range(p.levelmin+1, p.levelmax+1):
+                cell_frac = 2.0**(-L)
+                if any(e/box_kpc + 2*p.padding*cell_frac > 0.5 for e in extents_kpc):
+                    music_risk = True
+                    break
+            if music_risk:
+                print('|     | --- WARNING: padded Lagrangian region may exceed half the box in MUSIC (levelmin={0}, levelmax={1}, padding={2})'.format(p.levelmin,p.levelmax,p.padding))
             if(r200[i]>0.):
                 npart_r200 = len(virial_zlast[i])
             else:
@@ -762,7 +790,7 @@ def select(config_file):
                 hull_halo_idx.append(color_idx_map[i])
                 hull_m_ratio.append(mass_region/m200)
                 hull_n_neighbors.append(len(neighbors[wh1[0][i]]))
-                hull_safety.append(safety)
+                hull_safety.append(music_risk)
             if((p.plot or p.full_analysis)and(p.plot_traceback)):
                 proj =[['y','x'],['z','x']]
                 dproj =[[5,4],[6,4]]
