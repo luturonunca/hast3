@@ -622,6 +622,58 @@ def _top_halos_kpc_msol(output_dir, params):
     return np.column_stack([idx, pos_kpc, m_msol])
 
 
+def _top_halos_box_msol(output_dir, params):
+    """Read top-level halos. Returns (N,5) array: [index, x, y, z, mass_msol].
+    Positions are in [0,1] box-fraction units (no kpc conversion).
+    Mass in Msol."""
+    _msol   = 1.9885e33
+    unit_d  = params.get('unit_d', 1.0)
+    unit_l  = params.get('unit_l', 3.085677581e21)
+    boxlen  = params.get('boxlen', 1.0)
+    to_msol = unit_d * unit_l**3 / _msol
+
+    files = glob.glob(output_dir + '/halo_?????.txt?????')
+    use_halo = len(files) > 0
+    if not use_halo:
+        files = glob.glob(output_dir + '/clump_?????.txt?????')
+    if not files:
+        return None
+
+    chunks = []
+    for f in files:
+        try:
+            data = np.loadtxt(f, skiprows=1)
+        except Exception:
+            continue
+        if data.ndim == 1:
+            data = data.reshape(1, -1)
+        if data.size == 0:
+            continue
+        chunks.append(data)
+    if not chunks:
+        return None
+    data_all = np.vstack(chunks)
+
+    if use_halo:
+        idx = data_all[:, 0]
+        pos = data_all[:, 2:5]
+        m   = data_all[:, 6]
+    else:
+        top = data_all[:, 2] == data_all[:, 0]
+        if not np.any(top):
+            return None
+        data_all = data_all[top]
+        idx = data_all[:, 0]
+        pos = data_all[:, 4:7]
+        m   = data_all[:, 10]
+
+    # If positions are in cell units [0, nx_loc], normalise to [0, 1]
+    if np.max(pos) > 1.5:
+        pos = pos * boxlen
+
+    return np.column_stack([idx, pos, m * to_msol])
+
+
 def _r200_kpc(mass_msol, params):
     """Estimate R200 in kpc from halo mass in Msol using critical density at snapshot z."""
     H0   = params.get('H0',      70.0)
@@ -794,13 +846,12 @@ def plot_merger_tree(nodes, edges, ax_tree, ax_mass, params, halo_label=''):
 
 
 def build_merger_tree(sim_dir, halo_id, output_zlast, output_zinit,
-                      mass_frac_min=0.1, r_search_factor=2.0):
+                      mass_frac_min=0.1, r_search_factor=1.0):
     """Build a merger tree for a given halo by backward snapshot traversal.
 
-    Tracks halos using particle ID (iord) overlap between snapshots, following
-    the same strategy as the HAST decontamination function. At each snapshot
-    the progenitor is the halo whose particles share the highest fraction of
-    IDs with the particles of the tracked descendant.
+    All positions and search radii are in box-fraction units [0,1], matching
+    the native frame of both RAMSES clump files and yt particle positions
+    (yt pos / yt domain_width). This avoids unit_l / h-factor ambiguities.
 
     Parameters
     ----------
@@ -813,19 +864,10 @@ def build_merger_tree(sim_dir, halo_id, output_zlast, output_zinit,
     output_zinit : str
         Path to the first (high-z) output directory; traversal stops here.
     mass_frac_min : float
-        Minimum iord overlap fraction (relative to tracked halo) to record
-        a secondary progenitor as a merger event.
+        Minimum fraction of found tracked particles that must be outside the
+        main ball to record a secondary progenitor branch.
     r_search_factor : float
-        Particle gathering radius in units of halo R200 (physical kpc).
-
-    Returns
-    -------
-    nodes : list of dict
-        Keys: snap, halo_id, mass (Msol), pos (comoving kpc), z, r200 (kpc),
-        is_main.
-    edges : list of tuple
-        (progenitor_node_idx, descendant_node_idx, kind) where kind is
-        'main' or 'merger'.
+        Particle gathering radius in units of R200 (box fractions).
     """
     def _snap_num(path):
         return int(os.path.basename(path).split('_')[1])
@@ -840,9 +882,9 @@ def build_merger_tree(sim_dir, halo_id, output_zlast, output_zinit,
     edges = []
 
     # --- Root node at output_zlast ---
-    params0 = _read_info_params(output_zlast)
-    aexp0   = params0.get('aexp', 1.0)
-    halos0  = _top_halos_kpc_msol(output_zlast, params0)
+    params0  = _read_info_params(output_zlast)
+    aexp0    = params0.get('aexp', 1.0)
+    halos0   = _top_halos_box_msol(output_zlast, params0)
     if halos0 is None:
         print('[build_merger_tree] No halo files at {0}'.format(output_zlast))
         return [], []
@@ -850,37 +892,42 @@ def build_merger_tree(sim_dir, halo_id, output_zlast, output_zinit,
     if len(row0) == 0:
         print('[build_merger_tree] halo_id {0} not found at {1}'.format(halo_id, output_zlast))
         return [], []
-    row0   = row0[0]
-    r200_0 = _r200_kpc(row0[4], params0)
+    row0 = row0[0]
 
-    # Load particles at output_zlast; gather iord within r_search_factor*r200
     try:
         sim0 = _load_sim(output_zlast)
     except Exception as e:
         print('[build_merger_tree] Could not load particles at {0}: {1}'.format(output_zlast, e))
         return [], []
-    tree0 = KDTree(sim0['pos'])
-    hits0 = tree0.query_radius([row0[1:4]], r_search_factor * r200_0)[0]
+
+    # All positions in box units [0,1]: yt_pos / yt_box_size
+    box0_kpc  = float(sim0.properties['boxsize'].in_units('kpc'))
+    pos_box0  = sim0['pos'] / box0_kpc          # shape (N,3), values in [0,1]
+    r200_0_kpc = _r200_kpc(row0[4], params0)
+    r200_0_box = r200_0_kpc / box0_kpc          # r200 in box fractions
+
+    tree0 = KDTree(pos_box0)
+    # row0[1:4] are already in [0,1] box fractions from _top_halos_box_msol
+    hits0 = tree0.query_radius([row0[1:4]], r_search_factor * r200_0_box)[0]
     iord0 = sim0['iord'][hits0]
     if len(iord0) == 0:
-        print('[build_merger_tree] No particles found in root halo')
+        print('[build_merger_tree] No particles found in root halo '
+              '(halo pos={0}, r200_box={1:.5f})'.format(row0[1:4], r200_0_box))
         return [], []
 
     nodes.append({
         'snap':    output_zlast,
         'halo_id': int(row0[0]),
         'mass':    row0[4],
-        'pos':     row0[1:4] / aexp0,  # comoving kpc
+        'pos':     row0[1:4],   # box fractions [0,1]
         'z':       1.0 / aexp0 - 1.0,
-        'r200':    r200_0,
+        'r200':    r200_0_box,
         'is_main': True,
     })
 
-    # watch_list: (node_idx, tracked_iord_array, com_comoving_kpc, r200_kpc)
-    # Comoving COM is stable across snapshots and lets us predict position at earlier epochs.
-    watch_list = [(0, iord0, row0[1:4] / aexp0, r200_0)]
-    print('[build_merger_tree] root: halo_id={0}  npart={1}  r200={2:.1f} kpc'.format(
-        halo_id, len(iord0), r200_0))
+    watch_list = [(0, iord0, row0[1:4])]
+    print('[build_merger_tree] root: halo_id={0}  npart={1}  r200={2:.1f} kpc  r200_box={3:.5f}'.format(
+        halo_id, len(iord0), r200_0_kpc, r200_0_box))
 
     # --- Backward traversal ---
     for snap in snaps[1:]:
@@ -888,59 +935,55 @@ def build_merger_tree(sim_dir, halo_id, output_zlast, output_zinit,
             break
         params = _read_info_params(snap)
         aexp   = params.get('aexp', 1.0)
-        halos  = _top_halos_kpc_msol(snap, params)
-        if halos is None:
-            continue
-        z = 1.0 / aexp - 1.0
+        z      = 1.0 / aexp - 1.0
+        halos  = _top_halos_box_msol(snap, params)   # positions in [0,1]
 
         try:
             sim = _load_sim(snap)
         except Exception:
             continue
-        tree_part  = KDTree(sim['pos'])
-        pos_snap   = sim['pos']
-        iord_snap  = sim['iord']
-        mass_snap  = sim['mass']
-        pm_mass    = float(np.min(mass_snap[mass_snap > 0]))
+
+        box_kpc  = float(sim.properties['boxsize'].in_units('kpc'))
+        pos_snap = sim['pos'] / box_kpc              # [0,1] box fractions
+        iord_snap = sim['iord']
+        mass_snap = sim['mass']
+        pm_mass   = float(np.min(mass_snap[mass_snap > 0]))
+        tree_part = KDTree(pos_snap)
 
         new_watch = []
-        for (desc_idx, tracked_iord, com_comoving_desc, r200_desc) in watch_list:
-            # Find tracked particles by iord — no positional assumption needed.
+        for (desc_idx, tracked_iord, pos_desc_box) in watch_list:
+            # Find tracked particles by iord — fully position-independent
             found_mask = np.isin(iord_snap, tracked_iord)
             if not np.any(found_mask):
                 continue
-            found_pos  = pos_snap[found_mask]   # physical kpc, yt frame
+            found_pos  = pos_snap[found_mask]   # [0,1]
             found_iord = iord_snap[found_mask]
 
-            # COM of ALL tracked particles found at this snapshot.
-            # At high-z the proto-halo particles are scattered; the COM traces
-            # the Lagrangian centre of the final halo, which is well-defined
-            # even before the halo is assembled.
-            com_main   = np.mean(found_pos, axis=0)
-            mass_main  = len(found_iord) * pm_mass
-            r200_main  = _r200_kpc(mass_main, params)
+            com_box   = np.mean(found_pos, axis=0)
+            mass_node = len(found_iord) * pm_mass
+            r200_box  = _r200_kpc(mass_node, params) / box_kpc
 
-            # Nearest clump label (metadata only — clump positions not used for tracking)
-            halo_id_main    = -1
-            mass_label_main = mass_main
+            # Nearest clump label (metadata only)
+            halo_id_node    = -1
+            mass_label_node = mass_node
             if halos is not None and len(halos) > 0:
-                dists = np.linalg.norm(halos[:, 1:4] - com_main, axis=1)
-                halo_id_main    = int(halos[np.argmin(dists), 0])
-                mass_label_main = halos[np.argmin(dists), 4]
+                dists = np.linalg.norm(halos[:, 1:4] - com_box, axis=1)
+                best  = np.argmin(dists)
+                halo_id_node    = int(halos[best, 0])
+                mass_label_node = halos[best, 4]
 
-            main_idx = len(nodes)
+            node_idx = len(nodes)
             nodes.append({
                 'snap':    snap,
-                'halo_id': halo_id_main,
-                'mass':    mass_label_main,
-                'pos':     com_main / aexp,   # comoving kpc
+                'halo_id': halo_id_node,
+                'mass':    mass_label_node,
+                'pos':     com_box,   # box fractions [0,1]
                 'z':       z,
-                'r200':    r200_main,
+                'r200':    r200_box,
                 'is_main': True,
             })
-            edges.append((main_idx, desc_idx, 'main'))
-            # Keep only the tracked subset (no expansion beyond original iord0 particles)
-            new_watch.append((main_idx, found_iord, com_main / aexp, r200_main))
+            edges.append((node_idx, desc_idx, 'main'))
+            new_watch.append((node_idx, found_iord, com_box))
 
         watch_list = new_watch
 
