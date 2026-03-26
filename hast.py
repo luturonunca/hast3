@@ -824,111 +824,25 @@ def _add_redshift_top_axis(ax, params, z_ticks=(0, 0.5, 1, 2, 3, 5, 7, 10)):
     return ax2
 
 
-def plot_merger_tree(nodes, edges, ax_tree, ax_mass, params, halo_label=''):
-    """Plot a merger tree in two panels sharing the same lookback-time x-axis.
+def plot_merger_tree(nodes, edges, ax_tree, ax_mass, params,
+                     halo_label='', z_scale=None, proj=('x', 'y')):
+    """Scatter DM particles of each tree node, y-shifted by redshift.
 
-    ax_tree : classic horizontal tree — x = lookback time, y = branch layout
-    ax_mass : mass growth — x = lookback time, y = M [Msol] log scale
+    Particles belonging to each node are scattered in the proj[0]-proj[1]
+    plane (kpc). The proj[1] coordinate is shifted by z * z_scale so that
+    z=0 nodes are unshifted and higher-redshift snapshots appear progressively
+    offset upward. Horizontal dotted lines label each snapshot's redshift.
+    Main branch is blue, merger branches are orange.
 
-    Both panels have a secondary top x-axis showing redshift.
-    z=0 is on the left, high-z on the right.
+    ax_mass is hidden (kept for pipeline compatibility).
+    z_scale : kpc per unit redshift. Defaults to box_kpc of the root snapshot.
+    proj    : spatial axes to project, chosen from 'x', 'y', 'z'.
     """
-    col_main   = '#3182bd'
-    col_merger = '#e6550d'
+    ax_mass.set_visible(False)
 
     if not nodes:
-        for ax in (ax_tree, ax_mass):
-            ax.text(0.5, 0.5, 'No tree data', transform=ax.transAxes, ha='center')
-        return
-
-    # --- Lookback time per node ---
-    t_lb = [_lookback_time_gyr(1.0 / (1.0 + nd['z']), params) for nd in nodes]
-
-    # --- Assign y-positions for tree panel (branch layout) ---
-    y_pos    = [0.0] * len(nodes)
-    _counter = [0]
-
-    def _assign_y(node_idx, y):
-        y_pos[node_idx] = y
-        progs_main   = [p for (p, d, k) in edges if d == node_idx and k == 'main']
-        progs_merger = [p for (p, d, k) in edges if d == node_idx and k == 'merger']
-        if progs_main:
-            _assign_y(progs_main[0], y)
-        for p in progs_merger:
-            _counter[0] += 1
-            _assign_y(p, y + _counter[0])
-
-    _assign_y(0, 0.0)
-
-    # --- Left panel: tree ---
-    for (p_idx, d_idx, kind) in edges:
-        lw  = 2.0 if kind == 'main' else 1.2
-        ls  = '-'  if kind == 'main' else '--'
-        col = col_main if kind == 'main' else col_merger
-        ax_tree.plot([t_lb[p_idx], t_lb[d_idx]],
-                     [y_pos[p_idx], y_pos[d_idx]],
-                     color=col, lw=lw, ls=ls, alpha=0.85, zorder=3)
-
-    m_max = max(nd['mass'] for nd in nodes)
-    for i, nd in enumerate(nodes):
-        col  = col_main if nd['is_main'] else col_merger
-        size = max(30, 300 * nd['mass'] / m_max)
-        ax_tree.scatter(t_lb[i], y_pos[i], s=size, color=col,
-                        edgecolors='k', linewidths=0.5, zorder=5)
-
-    ax_tree.set_xlabel('Lookback time [Gyr]')
-    ax_tree.set_ylabel('Branch')
-    ax_tree.set_yticks([])
-    ax_tree.set_title('Merger tree — halo {0}'.format(halo_label))
-    _add_redshift_top_axis(ax_tree, params)
-    sns.despine(ax=ax_tree, left=True)
-
-    # --- Right panel: mass growth ---
-    main_nodes = sorted([(t_lb[i], nd['mass']) for i, nd in enumerate(nodes)
-                         if nd['is_main']], key=lambda x: x[0])
-    if main_nodes:
-        t_main, m_main = zip(*main_nodes)
-        ax_mass.plot(t_main, m_main, '-o', color=col_main, lw=2, ms=5, label='Main branch')
-
-    for (p_idx, d_idx, kind) in edges:
-        if kind != 'merger':
-            continue
-        t_ev = t_lb[d_idx]
-        m_sec = nodes[p_idx]['mass']
-        m_desc = nodes[d_idx]['mass']
-        ratio = m_sec / m_desc
-        ax_mass.axvline(t_ev, color=col_merger, lw=1.0, ls='--', alpha=0.4)
-        ax_mass.scatter(t_ev, m_sec, s=max(30, 300 * ratio),
-                        color=col_merger, edgecolors='k', linewidths=0.5, zorder=5)
-
-    ax_mass.set_yscale('log')
-    ax_mass.set_xlabel('Lookback time [Gyr]')
-    ax_mass.set_ylabel('$M$ [M$_\\odot$]')
-    ax_mass.set_title('Mass growth')
-    _add_redshift_top_axis(ax_mass, params)
-    sns.despine(ax=ax_mass)
-
-
-def plot_merger_tree_particles(nodes, edges, ax, params,
-                               z_scale=None, proj=('x', 'y')):
-    """Scatter DM particles of each tree node with y shifted by lookback time.
-
-    For each node the particles assigned during build_merger_tree are plotted
-    at their physical positions (kpc), but the axis selected by proj[1] is
-    shifted by lookback_time_gyr * z_scale so that different snapshots are
-    vertically separated, building a spatial merger tree.
-
-    Parameters
-    ----------
-    nodes, edges : output of build_merger_tree (nodes must contain 'iord').
-    ax           : matplotlib Axes.
-    params       : cosmological params dict (from _read_info_params at z_last).
-    z_scale      : kpc per Gyr used to separate snapshots vertically.
-                   Defaults to box_size_kpc / 13.8 estimated from the root node.
-    proj         : pair of axes to use as (x, y), chosen from 'x', 'y', 'z'.
-    """
-    if not nodes:
-        ax.text(0.5, 0.5, 'No tree data', transform=ax.transAxes, ha='center')
+        ax_tree.text(0.5, 0.5, 'No tree data',
+                     transform=ax_tree.transAxes, ha='center')
         return
 
     col_main   = '#3182bd'
@@ -937,51 +851,58 @@ def plot_merger_tree_particles(nodes, edges, ax, params,
     xi = axis_map[proj[0]]
     yi = axis_map[proj[1]]
 
-    # Load each unique snapshot once
+    # Load each unique snapshot once; positions in box fractions [0,1]
     sim_cache = {}
     for nd in nodes:
         snap = nd['snap']
         if snap in sim_cache or 'iord' not in nd:
             continue
         try:
-            sim = _load_sim(snap)
+            sim     = _load_sim(snap)
             box_kpc = float(sim.properties['boxsize'].in_units('kpc'))
             sim_cache[snap] = (sim['pos'] / box_kpc, sim['iord'], box_kpc)
         except Exception:
             pass
 
-    # Default z_scale: spread the full Hubble time over one box width
+    # Default z_scale: one box width per unit redshift
     if z_scale is None:
         snap0 = nodes[0]['snap']
-        if snap0 in sim_cache:
-            box_kpc = sim_cache[snap0][2]
-        else:
-            box_kpc = 100000.0   # fallback 100 Mpc
-        z_scale = box_kpc / 13.8
+        box_kpc = sim_cache[snap0][2] if snap0 in sim_cache else 100000.0
+        z_scale = box_kpc
 
+    # Scatter particles for each node
+    seen_z = {}   # z (rounded) -> y_shift, for redshift labels
     for nd in nodes:
         snap = nd['snap']
         if snap not in sim_cache or 'iord' not in nd:
             continue
         pos_box, iord_snap, box_kpc = sim_cache[snap]
 
-        # Get positions of this node's tracked particles
         mask = np.isin(iord_snap, nd['iord'])
         if not np.any(mask):
             continue
-        pos_kpc = pos_box[mask] * box_kpc   # (N,3) in kpc
 
-        t_lb    = _lookback_time_gyr(1.0 / (1.0 + nd['z']), params)
-        y_shift = t_lb * z_scale
+        y_shift = nd['z'] * z_scale
+        col     = col_main if nd['is_main'] else col_merger
+        ax_tree.scatter(pos_box[mask, xi] * box_kpc,
+                        pos_box[mask, yi] * box_kpc + y_shift,
+                        s=0.5, color=col, alpha=0.4, rasterized=True)
 
-        col = col_main if nd['is_main'] else col_merger
-        ax.scatter(pos_kpc[:, xi], pos_kpc[:, yi] + y_shift,
-                   s=0.5, color=col, alpha=0.3, rasterized=True)
+        z_key = round(nd['z'], 2)
+        if z_key not in seen_z:
+            seen_z[z_key] = y_shift
 
-    ax.set_xlabel('{0} [kpc]'.format(proj[0]))
-    ax.set_ylabel('{0} + lookback time × scale [kpc]'.format(proj[1]))
-    ax.set_title('Spatial merger tree')
-    sns.despine(ax=ax)
+    # Horizontal dotted lines with redshift labels
+    xlim = ax_tree.get_xlim()
+    for z_val, y_sh in sorted(seen_z.items()):
+        ax_tree.axhline(y_sh, color='grey', lw=0.5, ls=':', alpha=0.6, zorder=0)
+        ax_tree.text(xlim[1], y_sh, ' z={0:.2f}'.format(z_val),
+                     va='center', ha='left', fontsize=7, color='grey')
+
+    ax_tree.set_xlabel('{0} [kpc]'.format(proj[0]))
+    ax_tree.set_ylabel('{0} [kpc]  (+ z × {1:.0f})'.format(proj[1], z_scale))
+    ax_tree.set_title('Merger tree — halo {0}'.format(halo_label))
+    sns.despine(ax=ax_tree)
 
 
 def build_merger_tree(sim_dir, halo_id, output_zlast, output_zinit,
