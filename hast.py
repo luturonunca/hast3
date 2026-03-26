@@ -829,13 +829,15 @@ def plot_merger_tree(nodes, edges, ax_tree, ax_mass, params,
     """Scatter DM particles of each tree node, y-shifted by redshift.
 
     Particles belonging to each node are scattered in the proj[0]-proj[1]
-    plane (kpc). The proj[1] coordinate is shifted by z * z_scale so that
+    plane (kpc). The proj[1] coordinate is shifted by z/(1+z) * z_scale so that
     z=0 nodes are unshifted and higher-redshift snapshots appear progressively
-    offset upward. Horizontal dotted lines label each snapshot's redshift.
+    offset upward. The z/(1+z) mapping gives more visual separation at low
+    redshift where snapshots are closely spaced in z.
+    Horizontal dotted lines label each snapshot's redshift.
     Main branch is blue, merger branches are orange.
 
     ax_mass is hidden (kept for pipeline compatibility).
-    z_scale : kpc per unit redshift. Defaults to box_kpc of the root snapshot.
+    z_scale : kpc per unit z/(1+z). Defaults to 0.1 * box_kpc of root snapshot.
     proj    : spatial axes to project, chosen from 'x', 'y', 'z'.
     """
     ax_mass.set_visible(False)
@@ -921,13 +923,13 @@ def plot_merger_tree(nodes, edges, ax_tree, ax_mass, params,
                                          float(np.mean(pos_kpc[mask, yi]))))
         x_cent  = pos_kpc[mask, xi] - cx
         y_cent  = pos_kpc[mask, yi] - cy
-        y_shift = nd['z'] * z_scale
+        y_shift = (nd['z'] / (1.0 + nd['z'])) * z_scale
         col     = col_main if nd['is_main'] else col_merger
         ax_tree.scatter(x_cent, y_cent + y_shift,
                         s=0.5, color=col, alpha=0.4, rasterized=True)
 
         x_all.append(x_cent)
-        z_key = round(nd['z'], 2)
+        z_key = round(nd['z'], 3)
         if z_key not in seen_z:
             seen_z[z_key] = y_shift
 
@@ -946,16 +948,17 @@ def plot_merger_tree(nodes, edges, ax_tree, ax_mass, params,
                      va='center', ha='left', fontsize=7, color='grey')
 
     ax_tree.set_xlabel('{0} − <{0}> [kpc]'.format(proj[0]))
-    ax_tree.set_ylabel('{0} − <{0}> + z × {1:.0f} [kpc]'.format(proj[1], z_scale))
+    ax_tree.set_ylabel('{0} − <{0}> + z/(1+z) × {1:.0f} [kpc]'.format(proj[1], z_scale))
     ax_tree.set_title('Merger tree — halo {0}'.format(halo_label))
     sns.despine(ax=ax_tree)
 
 
 def build_merger_tree(sim_dir, halo_ids, output_zlast, output_zinit,
-                      r_search_factor=1.0):
+                      r_search_factor=1.0, z_max=6.0):
     """Build merger trees for one or more halos in a single pass through snapshots.
 
     halo_ids : int or list of ints
+    z_max    : stop traversal at snapshots with z > z_max (default 6.0)
     Returns  : dict { halo_id -> (nodes, edges) }
 
     At each snapshot (loaded once for all halos):
@@ -1049,6 +1052,9 @@ def build_merger_tree(sim_dir, halo_ids, output_zlast, output_zinit,
         params       = _read_info_params(snap)
         aexp         = params.get('aexp', 1.0)
         z            = 1.0 / aexp - 1.0
+        if z > z_max:
+            print('[build_merger_tree] z={0:.2f} > z_max={1:.1f}, stopping'.format(z, z_max))
+            break
         npart_thresh = _read_npart_threshold(snap)
 
         try:
