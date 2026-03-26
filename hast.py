@@ -873,6 +873,26 @@ def plot_merger_tree(nodes, edges, ax_tree, ax_mass, params,
         box_kpc = sim_cache[snap0][2] if snap0 in sim_cache else 100000.0
         z_scale = box_kpc * 0.1
 
+    # Pre-compute main-branch centre per snapshot for consistent centering
+    # All branches at the same snapshot are centred on the main branch mean,
+    # so merger branches appear spatially offset rather than collapsed to zero.
+    main_centre = {}   # snap -> (x_mean_kpc, y_mean_kpc)
+    for nd in nodes:
+        if not nd['is_main']:
+            continue
+        snap = nd['snap']
+        if snap not in sim_cache:
+            continue
+        pos_kpc, iord_snap, box_kpc = sim_cache[snap]
+        if 'iord' in nd and len(nd['iord']) > 0:
+            mask = np.isin(iord_snap, nd['iord'])
+        else:
+            dists = np.linalg.norm(pos_kpc - np.array(nd['pos']), axis=1)
+            mask  = dists <= nd['r200']
+        if np.any(mask):
+            main_centre[snap] = (float(np.mean(pos_kpc[mask, xi])),
+                                 float(np.mean(pos_kpc[mask, yi])))
+
     # Scatter particles for each node; track centred x range for xlim
     seen_z  = {}   # z (rounded) -> y_shift, for redshift labels
     x_all   = []   # all centred x values, to set xlim from actual spread
@@ -897,13 +917,13 @@ def plot_merger_tree(nodes, edges, ax_tree, ax_mass, params,
         print('[plot_merger_tree] node halo_id={0} z={1:.2f}: {2} particles'.format(
             nd['halo_id'], nd['z'], np.sum(mask)))
 
-        x_kpc  = pos_kpc[mask, xi]
-        y_kpc  = pos_kpc[mask, yi]
-        x_cent = x_kpc - np.mean(x_kpc)
+        cx, cy  = main_centre.get(snap, (float(np.mean(pos_kpc[mask, xi])),
+                                         float(np.mean(pos_kpc[mask, yi]))))
+        x_cent  = pos_kpc[mask, xi] - cx
+        y_cent  = pos_kpc[mask, yi] - cy
         y_shift = nd['z'] * z_scale
         col     = col_main if nd['is_main'] else col_merger
-        ax_tree.scatter(x_cent,
-                        y_kpc - np.mean(y_kpc) + y_shift,
+        ax_tree.scatter(x_cent, y_cent + y_shift,
                         s=0.5, color=col, alpha=0.4, rasterized=True)
 
         x_all.append(x_cent)
