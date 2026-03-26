@@ -873,8 +873,9 @@ def plot_merger_tree(nodes, edges, ax_tree, ax_mass, params,
         box_kpc = sim_cache[snap0][2] if snap0 in sim_cache else 100000.0
         z_scale = box_kpc * 0.1
 
-    # Scatter particles for each node
-    seen_z = {}   # z (rounded) -> y_shift, for redshift labels
+    # Scatter particles for each node; track centred x range for xlim
+    seen_z  = {}   # z (rounded) -> y_shift, for redshift labels
+    x_all   = []   # all centred x values, to set xlim from actual spread
     for nd in nodes:
         snap = nd['snap']
         if snap not in sim_cache:
@@ -898,25 +899,25 @@ def plot_merger_tree(nodes, edges, ax_tree, ax_mass, params,
 
         x_kpc   = pos_box[mask, xi] * box_kpc
         y_kpc   = pos_box[mask, yi] * box_kpc
+        x_cent  = x_kpc - np.mean(x_kpc)
         y_shift = nd['z'] * z_scale
         col     = col_main if nd['is_main'] else col_merger
-        ax_tree.scatter(x_kpc - np.mean(x_kpc),
+        ax_tree.scatter(x_cent,
                         y_kpc - np.mean(y_kpc) + y_shift,
                         s=0.5, color=col, alpha=0.4, rasterized=True)
 
+        x_all.append(x_cent)
         z_key = round(nd['z'], 2)
         if z_key not in seen_z:
             seen_z[z_key] = y_shift
 
-    # Set x-axis width to ±2 R200 of the root node (z=0 halo)
-    root = nodes[0]
-    snap0 = root['snap']
-    if snap0 in sim_cache:
-        r200_kpc = root['r200'] * sim_cache[snap0][2]   # r200 in box fracs * box_kpc
+    # xlim from actual particle spread
+    if x_all:
+        x_concat   = np.concatenate(x_all)
+        half_width = np.max(np.abs(x_concat)) * 3.0
+        ax_tree.set_xlim(-half_width, half_width)
     else:
-        r200_kpc = z_scale  # fallback
-    half_width = 2.0 * r200_kpc
-    ax_tree.set_xlim(-half_width, half_width)
+        half_width = 1.0
 
     # Horizontal dotted lines with redshift labels
     for z_val, y_sh in sorted(seen_z.items()):
