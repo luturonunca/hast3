@@ -1027,12 +1027,17 @@ def build_merger_tree(sim_dir, halo_id, output_zlast, output_zinit,
 
             # Step 1: find tracked particles in this snapshot by iord
             found_mask = np.isin(iord_snap, tracked_iord)
+            n_tracked  = len(tracked_iord)
+            n_found    = int(np.sum(found_mask))
+            print('[build_merger_tree] snap={0}  z={1:.3f}  tracked={2}  found={3}'.format(
+                os.path.basename(snap), z, n_tracked, n_found))
             if not np.any(found_mask):
                 continue
             found_pos  = pos_snap[found_mask]
             found_iord = iord_snap[found_mask]
 
             if halos is None or len(halos) == 0:
+                print('[build_merger_tree]   no halo catalogue at this snap — skipping')
                 continue
 
             # Step 2: for each halo collect the indices (into found_pos) of
@@ -1087,9 +1092,15 @@ def build_merger_tree(sim_dir, halo_id, output_zlast, output_zinit,
             # Step 4: drop halos below threshold, sort by particle count descending
             valid = [(hi, parts) for hi, parts in assigned.items()
                      if len(parts) >= npart_thresh]
+            print('[build_merger_tree]   halos claiming particles={0}  above threshold({1})={2}'.format(
+                len(assigned), npart_thresh, len(valid)))
             if not valid:
                 continue
             valid.sort(key=lambda x: len(x[1]), reverse=True)
+            for rank, (hi, parts) in enumerate(valid):
+                label = 'main' if rank == 0 else 'merger'
+                print('[build_merger_tree]   {0} halo_id={1}  npart={2}'.format(
+                    label, int(halos[hi, 0]), len(parts)))
 
             # Step 5: record nodes and edges; main = most particles
             for rank, (hi, parts) in enumerate(valid):
