@@ -908,11 +908,20 @@ def plot_merger_tree(nodes, edges, ax_tree, ax_mass, params,
         if z_key not in seen_z:
             seen_z[z_key] = y_shift
 
+    # Set x-axis width to ±2 R200 of the root node (z=0 halo)
+    root = nodes[0]
+    snap0 = root['snap']
+    if snap0 in sim_cache:
+        r200_kpc = root['r200'] * sim_cache[snap0][2]   # r200 in box fracs * box_kpc
+    else:
+        r200_kpc = z_scale  # fallback
+    half_width = 2.0 * r200_kpc
+    ax_tree.set_xlim(-half_width, half_width)
+
     # Horizontal dotted lines with redshift labels
-    xlim = ax_tree.get_xlim()
     for z_val, y_sh in sorted(seen_z.items()):
         ax_tree.axhline(y_sh, color='grey', lw=0.5, ls=':', alpha=0.6, zorder=0)
-        ax_tree.text(xlim[1], y_sh, ' z={0:.2f}'.format(z_val),
+        ax_tree.text(half_width, y_sh, ' z={0:.2f}'.format(z_val),
                      va='center', ha='left', fontsize=7, color='grey')
 
     ax_tree.set_xlabel('{0} − <{0}> [kpc]'.format(proj[0]))
