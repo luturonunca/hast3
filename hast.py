@@ -851,7 +851,7 @@ def plot_merger_tree(nodes, edges, ax_tree, ax_mass, params,
     xi = axis_map[proj[0]]
     yi = axis_map[proj[1]]
 
-    # Load each unique snapshot once; positions in box fractions [0,1]
+    # Load each unique snapshot once; positions in kpc
     sim_cache = {}
     for nd in nodes:
         snap = nd['snap']
@@ -860,7 +860,7 @@ def plot_merger_tree(nodes, edges, ax_tree, ax_mass, params,
         try:
             sim     = _load_sim(snap)
             box_kpc = float(sim.properties['boxsize'].in_units('kpc'))
-            sim_cache[snap] = (sim['pos'] / box_kpc, sim['iord'], box_kpc)
+            sim_cache[snap] = (np.array(sim['pos']), sim['iord'], box_kpc)
         except Exception as e:
             print('[plot_merger_tree] could not load {0}: {1}'.format(snap, e))
 
@@ -880,13 +880,13 @@ def plot_merger_tree(nodes, edges, ax_tree, ax_mass, params,
         snap = nd['snap']
         if snap not in sim_cache:
             continue
-        pos_box, iord_snap, box_kpc = sim_cache[snap]
+        pos_kpc, iord_snap, box_kpc = sim_cache[snap]
 
-        # Use stored iord if available, else fall back to R200 sphere
+        # Use stored iord if available, else fall back to R200 sphere (both in kpc)
         if 'iord' in nd and len(nd['iord']) > 0:
             mask = np.isin(iord_snap, nd['iord'])
         else:
-            dists = np.linalg.norm(pos_box - nd['pos'], axis=1)
+            dists = np.linalg.norm(pos_kpc - np.array(nd['pos']), axis=1)
             mask  = dists <= nd['r200']
 
         if not np.any(mask):
@@ -897,9 +897,9 @@ def plot_merger_tree(nodes, edges, ax_tree, ax_mass, params,
         print('[plot_merger_tree] node halo_id={0} z={1:.2f}: {2} particles'.format(
             nd['halo_id'], nd['z'], np.sum(mask)))
 
-        x_kpc   = pos_box[mask, xi] * box_kpc
-        y_kpc   = pos_box[mask, yi] * box_kpc
-        x_cent  = x_kpc - np.mean(x_kpc)
+        x_kpc  = pos_kpc[mask, xi]
+        y_kpc  = pos_kpc[mask, yi]
+        x_cent = x_kpc - np.mean(x_kpc)
         y_shift = nd['z'] * z_scale
         col     = col_main if nd['is_main'] else col_merger
         ax_tree.scatter(x_cent,
@@ -959,11 +959,11 @@ def build_merger_tree(sim_dir, halo_id, output_zlast, output_zinit,
     edges = []
 
     # --- Root node at output_zlast ---
-    params0 = _read_info_params(output_zlast)
-    aexp0   = params0.get('aexp', 1.0)
-    halos0  = _read_all_halos_box(output_zlast, params0)
-    if halos0 is None:
-        print('[build_merger_tree] No clump files at {0}'.format(output_zlast))
+    # Use halo_list (same as select): positions in kpc, mass in Msol at col 10
+    try:
+        halos0 = halo_list(output_zlast, quiet=True)
+    except Exception as e:
+        print('[build_merger_tree] Could not load halo list at {0}: {1}'.format(output_zlast, e))
         return [], []
     row0 = halos0[halos0[:, 0] == halo_id]
     if len(row0) == 0:
@@ -971,19 +971,20 @@ def build_merger_tree(sim_dir, halo_id, output_zlast, output_zinit,
         return [], []
     row0 = row0[0]
 
+    params0 = _read_info_params(output_zlast)
+    aexp0   = params0.get('aexp', 1.0)
+
     try:
         sim0 = _load_sim(output_zlast)
     except Exception as e:
         print('[build_merger_tree] Could not load particles: {0}'.format(e))
         return [], []
 
-    box0_kpc   = float(sim0.properties['boxsize'].in_units('kpc'))
-    pos_box0   = sim0['pos'] / box0_kpc
-    r200_0_kpc = _r200_kpc(row0[4], params0)
-    r200_0_box = r200_0_kpc / box0_kpc
+    pos_kpc0   = np.array(sim0['pos'])          # kpc
+    r200_0_kpc = _r200_kpc(row0[10], params0)   # kpc
 
-    tree0 = KDTree(pos_box0)
-    hits0 = tree0.query_radius([row0[1:4]], r_search_factor * r200_0_box)[0]
+    tree0 = KDTree(pos_kpc0)
+    hits0 = tree0.query_radius([row0[4:7]], r_search_factor * r200_0_kpc)[0]
     iord0 = sim0['iord'][hits0]
     if len(iord0) == 0:
         print('[build_merger_tree] No particles found in root halo')
@@ -992,10 +993,10 @@ def build_merger_tree(sim_dir, halo_id, output_zlast, output_zinit,
     nodes.append({
         'snap':    output_zlast,
         'halo_id': int(row0[0]),
-        'mass':    row0[4],
-        'pos':     row0[1:4],
+        'mass':    row0[10],
+        'pos':     row0[4:7],    # kpc
         'z':       1.0 / aexp0 - 1.0,
-        'r200':    r200_0_box,
+        'r200':    r200_0_kpc,   # kpc
         'is_main': True,
         'iord':    iord0,
     })
@@ -1011,15 +1012,18 @@ def build_merger_tree(sim_dir, halo_id, output_zlast, output_zinit,
         aexp         = params.get('aexp', 1.0)
         z            = 1.0 / aexp - 1.0
         npart_thresh = _read_npart_threshold(snap)
-        halos        = _read_all_halos_box(snap, params)  # (N,6): idx,x,y,z,mass,parent
+
+        try:
+            halos = halo_list(snap, quiet=True)   # positions in kpc, mass at col 10
+        except Exception:
+            continue
 
         try:
             sim = _load_sim(snap)
         except Exception:
             continue
 
-        box_kpc   = float(sim.properties['boxsize'].in_units('kpc'))
-        pos_snap  = sim['pos'] / box_kpc
+        pos_kpc   = np.array(sim['pos'])   # kpc
         iord_snap = sim['iord']
 
         new_watch = []
@@ -1027,26 +1031,21 @@ def build_merger_tree(sim_dir, halo_id, output_zlast, output_zinit,
 
             # Step 1: find tracked particles in this snapshot by iord
             found_mask = np.isin(iord_snap, tracked_iord)
-            n_tracked  = len(tracked_iord)
             n_found    = int(np.sum(found_mask))
             print('[build_merger_tree] snap={0}  z={1:.3f}  tracked={2}  found={3}'.format(
-                os.path.basename(snap), z, n_tracked, n_found))
+                os.path.basename(snap), z, len(tracked_iord), n_found))
             if not np.any(found_mask):
                 continue
-            found_pos  = pos_snap[found_mask]
-            found_iord = iord_snap[found_mask]
+            found_pos_kpc = pos_kpc[found_mask]   # kpc
+            found_iord    = iord_snap[found_mask]
 
-            if halos is None or len(halos) == 0:
-                print('[build_merger_tree]   no halo catalogue at this snap — skipping')
-                continue
-
-            # Step 2: for each halo collect the indices (into found_pos) of
-            # tracked particles that fall within r_search_factor * R200
-            halo_parts = {}  # array-row index hi -> set of found_pos indices
+            # Step 2: for each halo collect indices of tracked particles within R200
+            # halos cols: 0=idx, 2=parent, 4:7=pos_kpc, 10=mass_msol
+            halo_parts = {}
             for hi, hrow in enumerate(halos):
-                r200_box = _r200_kpc(hrow[4], params) / box_kpc
-                dists    = np.linalg.norm(found_pos - hrow[1:4], axis=1)
-                inside   = np.where(dists <= r_search_factor * r200_box)[0]
+                r200_kpc = _r200_kpc(hrow[10], params)
+                dists    = np.linalg.norm(found_pos_kpc - hrow[4:7], axis=1)
+                inside   = np.where(dists <= r_search_factor * r200_kpc)[0]
                 if len(inside) > 0:
                     halo_parts[hi] = set(inside.tolist())
 
@@ -1054,7 +1053,6 @@ def build_merger_tree(sim_dir, halo_id, output_zlast, output_zinit,
                 continue
 
             # Step 3: resolve overlaps — each particle assigned to exactly one halo
-            # Build reverse map: found_pos index -> list of halos claiming it
             part_halos = {}
             for hi, parts in halo_parts.items():
                 for p in parts:
@@ -1065,58 +1063,54 @@ def build_merger_tree(sim_dir, halo_id, output_zlast, output_zinit,
                 if len(his) == 1:
                     assigned[his[0]].add(p)
                     continue
-                # Multiple halos claim this particle: resolve host/subhalo
-                # Iteratively discard a halo if another claimant is its subhalo
-                # (i.e. the other's parent_id == this halo's idx → this is the host)
+                # Resolve host/subhalo: discard host if a subhalo also claims the particle
                 his_set = set(his)
                 changed = True
                 while changed:
                     changed = False
                     for hi in list(his_set):
-                        parent_id = int(halos[hi, 5])
+                        parent_id = int(halos[hi, 2])
                         for hj in list(his_set):
                             if hi != hj and int(halos[hj, 0]) == parent_id:
-                                # hi is subhalo of hj → discard host hj
                                 his_set.discard(hj)
                                 changed = True
                                 break
                         if changed:
                             break
-                # If peers remain (no parent relation), assign to nearest centre
+                # Peers: assign to nearest centre
                 if len(his_set) > 1:
                     best = min(his_set,
-                               key=lambda hi: np.linalg.norm(found_pos[p] - halos[hi, 1:4]))
+                               key=lambda hi: np.linalg.norm(found_pos_kpc[p] - halos[hi, 4:7]))
                     his_set = {best}
                 assigned[list(his_set)[0]].add(p)
 
             # Step 4: drop halos below threshold, sort by particle count descending
             valid = [(hi, parts) for hi, parts in assigned.items()
                      if len(parts) >= npart_thresh]
-            print('[build_merger_tree]   halos claiming particles={0}  above threshold({1})={2}'.format(
+            print('[build_merger_tree]   halos claiming={0}  above threshold({1})={2}'.format(
                 len(assigned), npart_thresh, len(valid)))
             if not valid:
                 continue
             valid.sort(key=lambda x: len(x[1]), reverse=True)
             for rank, (hi, parts) in enumerate(valid):
-                label = 'main' if rank == 0 else 'merger'
                 print('[build_merger_tree]   {0} halo_id={1}  npart={2}'.format(
-                    label, int(halos[hi, 0]), len(parts)))
+                    'main' if rank == 0 else 'merger', int(halos[hi, 0]), len(parts)))
 
-            # Step 5: record nodes and edges; main = most particles
+            # Step 5: record nodes and edges
             for rank, (hi, parts) in enumerate(valid):
-                hrow     = halos[hi]
-                part_idx = np.array(list(parts))
-                r200_box = _r200_kpc(hrow[4], params) / box_kpc
-                com_box  = np.mean(found_pos[part_idx], axis=0)
-                is_main  = (rank == 0)
-                node_idx = len(nodes)
+                hrow      = halos[hi]
+                part_idx  = np.array(list(parts))
+                r200_kpc  = _r200_kpc(hrow[10], params)
+                com_kpc   = np.mean(found_pos_kpc[part_idx], axis=0)
+                is_main   = (rank == 0)
+                node_idx  = len(nodes)
                 nodes.append({
                     'snap':    snap,
                     'halo_id': int(hrow[0]),
-                    'mass':    hrow[4],
-                    'pos':     com_box,
+                    'mass':    hrow[10],
+                    'pos':     com_kpc,    # kpc
                     'z':       z,
-                    'r200':    r200_box,
+                    'r200':    r200_kpc,   # kpc
                     'is_main': is_main,
                     'iord':    found_iord[part_idx],
                 })
