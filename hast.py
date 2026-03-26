@@ -895,10 +895,12 @@ def plot_merger_tree(nodes, edges, ax_tree, ax_mass, params,
             main_centre[snap] = (float(np.mean(pos_kpc[mask, xi])),
                                  float(np.mean(pos_kpc[mask, yi])))
 
-    # Scatter particles for each node; track centred x range for xlim
-    seen_z  = {}   # z (rounded) -> y_shift, for redshift labels
-    x_all   = []   # all centred x values, to set xlim from actual spread
-    for nd in nodes:
+    # Scatter particles for each node; track centred x range and per-node mean x
+    seen_z      = {}   # z (rounded) -> y_shift, for redshift labels
+    x_all       = []   # all centred x values, to set xlim from actual spread
+    node_xmean  = {}   # nd_idx -> mean centred x of that node's particles
+    node_yshift = {}   # nd_idx -> y_shift of that node
+    for nd_idx, nd in enumerate(nodes):
         snap = nd['snap']
         if snap not in sim_cache:
             continue
@@ -929,6 +931,8 @@ def plot_merger_tree(nodes, edges, ax_tree, ax_mass, params,
                         s=0.5, color=col, alpha=0.4, rasterized=True)
 
         x_all.append(x_cent)
+        node_xmean[nd_idx]  = float(np.mean(x_cent))
+        node_yshift[nd_idx] = y_shift
         z_key = round(nd['z'], 3)
         if z_key not in seen_z:
             seen_z[z_key] = y_shift
@@ -953,7 +957,31 @@ def plot_merger_tree(nodes, edges, ax_tree, ax_mass, params,
         ax_tree.axhline(y_sh, color='grey', lw=0.5, ls=':', alpha=0.6, zorder=0)
         if z_val in labelled:
             ax_tree.text(half_width, y_sh, ' z={0:.1f}'.format(z_val),
-                         va='center', ha='left', fontsize=8, color='grey')
+                         va='center', ha='left', fontsize=12, color='grey')
+
+    # Mass ratio annotations at merger events
+    # For each merger edge, find the corresponding main node at the same snapshot/descendant
+    # Build a lookup: (desc_idx, snap) -> main node_idx
+    main_at = {}   # (desc_idx, snap) -> node_idx of the main progenitor
+    for (nidx, didx, etype) in edges:
+        if etype == 'main':
+            main_at[(didx, nodes[nidx]['snap'])] = nidx
+    for (nidx, didx, etype) in edges:
+        if etype != 'merger':
+            continue
+        if nidx not in node_xmean:
+            continue
+        main_nidx = main_at.get((didx, nodes[nidx]['snap']))
+        if main_nidx is None:
+            continue
+        m_merger = nodes[nidx]['mass']
+        m_main   = nodes[main_nidx]['mass']
+        if m_main <= 0:
+            continue
+        ratio = m_merger / m_main
+        ax_tree.text(node_xmean[nidx], node_yshift[nidx],
+                     '  {0:.2f}'.format(ratio),
+                     va='center', ha='left', fontsize=8, color=col_merger)
 
     ax_tree.set_xlabel('')
     ax_tree.set_ylabel('')
