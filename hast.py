@@ -867,11 +867,11 @@ def plot_merger_tree(nodes, edges, ax_tree, ax_mass, params,
     print('[plot_merger_tree] {0} nodes, {1} snapshots loaded'.format(
         len(nodes), len(sim_cache)))
 
-    # Default z_scale: one box width per unit redshift
+    # Default z_scale: 0.1 box width per unit redshift
     if z_scale is None:
         snap0 = nodes[0]['snap']
         box_kpc = sim_cache[snap0][2] if snap0 in sim_cache else 100000.0
-        z_scale = box_kpc
+        z_scale = box_kpc * 0.1
 
     # Scatter particles for each node
     seen_z = {}   # z (rounded) -> y_shift, for redshift labels
@@ -896,10 +896,12 @@ def plot_merger_tree(nodes, edges, ax_tree, ax_mass, params,
         print('[plot_merger_tree] node halo_id={0} z={1:.2f}: {2} particles'.format(
             nd['halo_id'], nd['z'], np.sum(mask)))
 
+        x_kpc   = pos_box[mask, xi] * box_kpc
+        y_kpc   = pos_box[mask, yi] * box_kpc
         y_shift = nd['z'] * z_scale
         col     = col_main if nd['is_main'] else col_merger
-        ax_tree.scatter(pos_box[mask, xi] * box_kpc,
-                        pos_box[mask, yi] * box_kpc + y_shift,
+        ax_tree.scatter(x_kpc - np.mean(x_kpc),
+                        y_kpc - np.mean(y_kpc) + y_shift,
                         s=0.5, color=col, alpha=0.4, rasterized=True)
 
         z_key = round(nd['z'], 2)
@@ -913,8 +915,8 @@ def plot_merger_tree(nodes, edges, ax_tree, ax_mass, params,
         ax_tree.text(xlim[1], y_sh, ' z={0:.2f}'.format(z_val),
                      va='center', ha='left', fontsize=7, color='grey')
 
-    ax_tree.set_xlabel('{0} [kpc]'.format(proj[0]))
-    ax_tree.set_ylabel('{0} [kpc]  (+ z × {1:.0f})'.format(proj[1], z_scale))
+    ax_tree.set_xlabel('{0} − <{0}> [kpc]'.format(proj[0]))
+    ax_tree.set_ylabel('{0} − <{0}> + z × {1:.0f} [kpc]'.format(proj[1], z_scale))
     ax_tree.set_title('Merger tree — halo {0}'.format(halo_label))
     sns.despine(ax=ax_tree)
 
