@@ -674,6 +674,68 @@ def _top_halos_box_msol(output_dir, params):
     return np.column_stack([idx, pos, m * to_msol])
 
 
+def _read_all_halos_box(output_dir, params):
+    """Read ALL halos (including subhalos) from clump files.
+    Returns (N,6) array: [idx, x, y, z, mass_msol, parent_idx].
+    Positions in [0,1] box fractions. Returns None if no files found."""
+    _msol   = 1.9885e33
+    unit_d  = params.get('unit_d', 1.0)
+    unit_l  = params.get('unit_l', 3.085677581e21)
+    boxlen  = params.get('boxlen', 1.0)
+    to_msol = unit_d * unit_l**3 / _msol
+
+    files = glob.glob(output_dir + '/clump_?????.txt?????')
+    if not files:
+        return None
+    chunks = []
+    for f in files:
+        try:
+            data = np.loadtxt(f, skiprows=1)
+        except Exception:
+            continue
+        if data.ndim == 1:
+            data = data.reshape(1, -1)
+        if data.size == 0:
+            continue
+        chunks.append(data)
+    if not chunks:
+        return None
+    data_all = np.vstack(chunks)
+    # clump cols: index(0) lev(1) parent(2) ncell(3) x(4) y(5) z(6) ... mass(10)
+    idx    = data_all[:, 0]
+    parent = data_all[:, 2]
+    pos    = data_all[:, 4:7]
+    m      = data_all[:, 10] * to_msol
+    if np.max(pos) > 1.5:
+        pos = pos * boxlen
+    return np.column_stack([idx, pos, m, parent])  # (N,6)
+
+
+def _read_npart_threshold(output_dir, default=20):
+    """Read mass_threshold from namelist.txt in the snapshot directory.
+    In CLUMPFIND_PARAMS, mass_threshold is in units of the minimum particle
+    mass, so it is effectively a minimum particle count."""
+    path = os.path.join(output_dir, 'namelist.txt')
+    if not os.path.exists(path):
+        return default
+    in_block = False
+    with open(path, 'r') as f:
+        for line in f:
+            l = line.strip().lower()
+            if l.startswith('&clumpfind_params'):
+                in_block = True
+                continue
+            if in_block:
+                if l.startswith('/') or l.startswith('&'):
+                    break
+                if 'mass_threshold' in l and '=' in l:
+                    try:
+                        return int(float(l.split('=')[1].strip().split()[0].rstrip(',')))
+                    except (ValueError, IndexError):
+                        pass
+    return default
+
+
 def _r200_kpc(mass_msol, params):
     """Estimate R200 in kpc from halo mass in Msol using critical density at snapshot z."""
     H0   = params.get('H0',      70.0)
@@ -846,28 +908,19 @@ def plot_merger_tree(nodes, edges, ax_tree, ax_mass, params, halo_label=''):
 
 
 def build_merger_tree(sim_dir, halo_id, output_zlast, output_zinit,
-                      mass_frac_min=0.1, r_search_factor=1.0):
-    """Build a merger tree for a given halo by backward snapshot traversal.
+                      r_search_factor=1.0):
+    """Build a merger tree by backward iord-tracking through snapshots.
 
-    All positions and search radii are in box-fraction units [0,1], matching
-    the native frame of both RAMSES clump files and yt particle positions
-    (yt pos / yt domain_width). This avoids unit_l / h-factor ambiguities.
-
-    Parameters
-    ----------
-    sim_dir : str
-        Directory containing all output_XXXXX subdirectories.
-    halo_id : int
-        Halo index at output_zlast (column 0 in halo/clump files).
-    output_zlast : str
-        Path to the last (low-z) output directory.
-    output_zinit : str
-        Path to the first (high-z) output directory; traversal stops here.
-    mass_frac_min : float
-        Minimum fraction of found tracked particles that must be outside the
-        main ball to record a secondary progenitor branch.
-    r_search_factor : float
-        Particle gathering radius in units of R200 (box fractions).
+    At each snapshot:
+    1. Find tracked particles by iord matching (position-independent).
+    2. Assign each particle to the halo whose R200 contains it.
+       If a particle is inside both a host and its subhalo, assign to the
+       subhalo (innermost). If inside two peer halos, assign to the nearest
+       centre.
+    3. Drop halos with fewer than mass_threshold particles (read from
+       output_dir/namelist.txt; defaults to 20).
+    4. The progenitor with the most particles is the 'main' branch; the
+       rest are 'merger' branches, each carrying its own iord subset forward.
     """
     def _snap_num(path):
         return int(os.path.basename(path).split('_')[1])
@@ -882,11 +935,11 @@ def build_merger_tree(sim_dir, halo_id, output_zlast, output_zinit,
     edges = []
 
     # --- Root node at output_zlast ---
-    params0  = _read_info_params(output_zlast)
-    aexp0    = params0.get('aexp', 1.0)
-    halos0   = _top_halos_box_msol(output_zlast, params0)
+    params0 = _read_info_params(output_zlast)
+    aexp0   = params0.get('aexp', 1.0)
+    halos0  = _read_all_halos_box(output_zlast, params0)
     if halos0 is None:
-        print('[build_merger_tree] No halo files at {0}'.format(output_zlast))
+        print('[build_merger_tree] No clump files at {0}'.format(output_zlast))
         return [], []
     row0 = halos0[halos0[:, 0] == halo_id]
     if len(row0) == 0:
@@ -897,93 +950,141 @@ def build_merger_tree(sim_dir, halo_id, output_zlast, output_zinit,
     try:
         sim0 = _load_sim(output_zlast)
     except Exception as e:
-        print('[build_merger_tree] Could not load particles at {0}: {1}'.format(output_zlast, e))
+        print('[build_merger_tree] Could not load particles: {0}'.format(e))
         return [], []
 
-    # All positions in box units [0,1]: yt_pos / yt_box_size
-    box0_kpc  = float(sim0.properties['boxsize'].in_units('kpc'))
-    pos_box0  = sim0['pos'] / box0_kpc          # shape (N,3), values in [0,1]
+    box0_kpc   = float(sim0.properties['boxsize'].in_units('kpc'))
+    pos_box0   = sim0['pos'] / box0_kpc
     r200_0_kpc = _r200_kpc(row0[4], params0)
-    r200_0_box = r200_0_kpc / box0_kpc          # r200 in box fractions
+    r200_0_box = r200_0_kpc / box0_kpc
 
     tree0 = KDTree(pos_box0)
-    # row0[1:4] are already in [0,1] box fractions from _top_halos_box_msol
     hits0 = tree0.query_radius([row0[1:4]], r_search_factor * r200_0_box)[0]
     iord0 = sim0['iord'][hits0]
     if len(iord0) == 0:
-        print('[build_merger_tree] No particles found in root halo '
-              '(halo pos={0}, r200_box={1:.5f})'.format(row0[1:4], r200_0_box))
+        print('[build_merger_tree] No particles found in root halo')
         return [], []
 
     nodes.append({
         'snap':    output_zlast,
         'halo_id': int(row0[0]),
         'mass':    row0[4],
-        'pos':     row0[1:4],   # box fractions [0,1]
+        'pos':     row0[1:4],
         'z':       1.0 / aexp0 - 1.0,
         'r200':    r200_0_box,
         'is_main': True,
     })
-
-    watch_list = [(0, iord0, row0[1:4])]
-    print('[build_merger_tree] root: halo_id={0}  npart={1}  r200={2:.1f} kpc  r200_box={3:.5f}'.format(
-        halo_id, len(iord0), r200_0_kpc, r200_0_box))
+    watch_list = [(0, iord0)]
+    print('[build_merger_tree] root: halo_id={0}  npart={1}  r200={2:.1f} kpc'.format(
+        halo_id, len(iord0), r200_0_kpc))
 
     # --- Backward traversal ---
     for snap in snaps[1:]:
         if not watch_list:
             break
-        params = _read_info_params(snap)
-        aexp   = params.get('aexp', 1.0)
-        z      = 1.0 / aexp - 1.0
-        halos  = _top_halos_box_msol(snap, params)   # positions in [0,1]
+        params       = _read_info_params(snap)
+        aexp         = params.get('aexp', 1.0)
+        z            = 1.0 / aexp - 1.0
+        npart_thresh = _read_npart_threshold(snap)
+        halos        = _read_all_halos_box(snap, params)  # (N,6): idx,x,y,z,mass,parent
 
         try:
             sim = _load_sim(snap)
         except Exception:
             continue
 
-        box_kpc  = float(sim.properties['boxsize'].in_units('kpc'))
-        pos_snap = sim['pos'] / box_kpc              # [0,1] box fractions
+        box_kpc   = float(sim.properties['boxsize'].in_units('kpc'))
+        pos_snap  = sim['pos'] / box_kpc
         iord_snap = sim['iord']
-        mass_snap = sim['mass']
-        pm_mass   = float(np.min(mass_snap[mass_snap > 0]))
-        tree_part = KDTree(pos_snap)
 
         new_watch = []
-        for (desc_idx, tracked_iord, pos_desc_box) in watch_list:
-            # Find tracked particles by iord — fully position-independent
+        for (desc_idx, tracked_iord) in watch_list:
+
+            # Step 1: find tracked particles in this snapshot by iord
             found_mask = np.isin(iord_snap, tracked_iord)
             if not np.any(found_mask):
                 continue
-            found_pos  = pos_snap[found_mask]   # [0,1]
+            found_pos  = pos_snap[found_mask]
             found_iord = iord_snap[found_mask]
 
-            com_box   = np.mean(found_pos, axis=0)
-            mass_node = len(found_iord) * pm_mass
-            r200_box  = _r200_kpc(mass_node, params) / box_kpc
+            if halos is None or len(halos) == 0:
+                continue
 
-            # Nearest clump label (metadata only)
-            halo_id_node    = -1
-            mass_label_node = mass_node
-            if halos is not None and len(halos) > 0:
-                dists = np.linalg.norm(halos[:, 1:4] - com_box, axis=1)
-                best  = np.argmin(dists)
-                halo_id_node    = int(halos[best, 0])
-                mass_label_node = halos[best, 4]
+            # Step 2: for each halo collect the indices (into found_pos) of
+            # tracked particles that fall within r_search_factor * R200
+            halo_parts = {}  # array-row index hi -> set of found_pos indices
+            for hi, hrow in enumerate(halos):
+                r200_box = _r200_kpc(hrow[4], params) / box_kpc
+                dists    = np.linalg.norm(found_pos - hrow[1:4], axis=1)
+                inside   = np.where(dists <= r_search_factor * r200_box)[0]
+                if len(inside) > 0:
+                    halo_parts[hi] = set(inside.tolist())
 
-            node_idx = len(nodes)
-            nodes.append({
-                'snap':    snap,
-                'halo_id': halo_id_node,
-                'mass':    mass_label_node,
-                'pos':     com_box,   # box fractions [0,1]
-                'z':       z,
-                'r200':    r200_box,
-                'is_main': True,
-            })
-            edges.append((node_idx, desc_idx, 'main'))
-            new_watch.append((node_idx, found_iord, com_box))
+            if not halo_parts:
+                continue
+
+            # Step 3: resolve overlaps — each particle assigned to exactly one halo
+            # Build reverse map: found_pos index -> list of halos claiming it
+            part_halos = {}
+            for hi, parts in halo_parts.items():
+                for p in parts:
+                    part_halos.setdefault(p, []).append(hi)
+
+            assigned = {hi: set() for hi in halo_parts}
+            for p, his in part_halos.items():
+                if len(his) == 1:
+                    assigned[his[0]].add(p)
+                    continue
+                # Multiple halos claim this particle: resolve host/subhalo
+                # Iteratively discard a halo if another claimant is its subhalo
+                # (i.e. the other's parent_id == this halo's idx → this is the host)
+                his_set = set(his)
+                changed = True
+                while changed:
+                    changed = False
+                    for hi in list(his_set):
+                        parent_id = int(halos[hi, 5])
+                        for hj in list(his_set):
+                            if hi != hj and int(halos[hj, 0]) == parent_id:
+                                # hi is subhalo of hj → discard host hj
+                                his_set.discard(hj)
+                                changed = True
+                                break
+                        if changed:
+                            break
+                # If peers remain (no parent relation), assign to nearest centre
+                if len(his_set) > 1:
+                    best = min(his_set,
+                               key=lambda hi: np.linalg.norm(found_pos[p] - halos[hi, 1:4]))
+                    his_set = {best}
+                assigned[list(his_set)[0]].add(p)
+
+            # Step 4: drop halos below threshold, sort by particle count descending
+            valid = [(hi, parts) for hi, parts in assigned.items()
+                     if len(parts) >= npart_thresh]
+            if not valid:
+                continue
+            valid.sort(key=lambda x: len(x[1]), reverse=True)
+
+            # Step 5: record nodes and edges; main = most particles
+            for rank, (hi, parts) in enumerate(valid):
+                hrow     = halos[hi]
+                part_idx = np.array(list(parts))
+                r200_box = _r200_kpc(hrow[4], params) / box_kpc
+                com_box  = np.mean(found_pos[part_idx], axis=0)
+                is_main  = (rank == 0)
+                node_idx = len(nodes)
+                nodes.append({
+                    'snap':    snap,
+                    'halo_id': int(hrow[0]),
+                    'mass':    hrow[4],
+                    'pos':     com_box,
+                    'z':       z,
+                    'r200':    r200_box,
+                    'is_main': is_main,
+                })
+                edges.append((node_idx, desc_idx, 'main' if is_main else 'merger'))
+                new_watch.append((node_idx, found_iord[part_idx]))
 
         watch_list = new_watch
 
