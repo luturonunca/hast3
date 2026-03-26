@@ -855,14 +855,17 @@ def plot_merger_tree(nodes, edges, ax_tree, ax_mass, params,
     sim_cache = {}
     for nd in nodes:
         snap = nd['snap']
-        if snap in sim_cache or 'iord' not in nd:
+        if snap in sim_cache:
             continue
         try:
             sim     = _load_sim(snap)
             box_kpc = float(sim.properties['boxsize'].in_units('kpc'))
             sim_cache[snap] = (sim['pos'] / box_kpc, sim['iord'], box_kpc)
-        except Exception:
-            pass
+        except Exception as e:
+            print('[plot_merger_tree] could not load {0}: {1}'.format(snap, e))
+
+    print('[plot_merger_tree] {0} nodes, {1} snapshots loaded'.format(
+        len(nodes), len(sim_cache)))
 
     # Default z_scale: one box width per unit redshift
     if z_scale is None:
@@ -874,13 +877,24 @@ def plot_merger_tree(nodes, edges, ax_tree, ax_mass, params,
     seen_z = {}   # z (rounded) -> y_shift, for redshift labels
     for nd in nodes:
         snap = nd['snap']
-        if snap not in sim_cache or 'iord' not in nd:
+        if snap not in sim_cache:
             continue
         pos_box, iord_snap, box_kpc = sim_cache[snap]
 
-        mask = np.isin(iord_snap, nd['iord'])
+        # Use stored iord if available, else fall back to R200 sphere
+        if 'iord' in nd and len(nd['iord']) > 0:
+            mask = np.isin(iord_snap, nd['iord'])
+        else:
+            dists = np.linalg.norm(pos_box - nd['pos'], axis=1)
+            mask  = dists <= nd['r200']
+
         if not np.any(mask):
+            print('[plot_merger_tree] node halo_id={0} z={1:.2f}: no particles found'.format(
+                nd['halo_id'], nd['z']))
             continue
+
+        print('[plot_merger_tree] node halo_id={0} z={1:.2f}: {2} particles'.format(
+            nd['halo_id'], nd['z'], np.sum(mask)))
 
         y_shift = nd['z'] * z_scale
         col     = col_main if nd['is_main'] else col_merger
