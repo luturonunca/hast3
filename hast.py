@@ -782,7 +782,9 @@ def _load_merger_tree(fname, halo_id):
             payload = json.load(f)
         nodes = []
         for nd in payload['nodes']:
-            nd['pos'] = np.array(nd['pos'])
+            nd['pos']  = np.array(nd['pos'])
+            if 'iord' in nd:
+                nd['iord'] = np.array(nd['iord'], dtype=np.int64)
             nodes.append(nd)
         edges = [tuple(e) for e in payload['edges']]
         print('| Merger tree loaded from cache: {0}'.format(path))
@@ -907,6 +909,81 @@ def plot_merger_tree(nodes, edges, ax_tree, ax_mass, params, halo_label=''):
     sns.despine(ax=ax_mass)
 
 
+def plot_merger_tree_particles(nodes, edges, ax, params,
+                               z_scale=None, proj=('x', 'y')):
+    """Scatter DM particles of each tree node with y shifted by lookback time.
+
+    For each node the particles assigned during build_merger_tree are plotted
+    at their physical positions (kpc), but the axis selected by proj[1] is
+    shifted by lookback_time_gyr * z_scale so that different snapshots are
+    vertically separated, building a spatial merger tree.
+
+    Parameters
+    ----------
+    nodes, edges : output of build_merger_tree (nodes must contain 'iord').
+    ax           : matplotlib Axes.
+    params       : cosmological params dict (from _read_info_params at z_last).
+    z_scale      : kpc per Gyr used to separate snapshots vertically.
+                   Defaults to box_size_kpc / 13.8 estimated from the root node.
+    proj         : pair of axes to use as (x, y), chosen from 'x', 'y', 'z'.
+    """
+    if not nodes:
+        ax.text(0.5, 0.5, 'No tree data', transform=ax.transAxes, ha='center')
+        return
+
+    col_main   = '#3182bd'
+    col_merger = '#e6550d'
+    axis_map   = {'x': 0, 'y': 1, 'z': 2}
+    xi = axis_map[proj[0]]
+    yi = axis_map[proj[1]]
+
+    # Load each unique snapshot once
+    sim_cache = {}
+    for nd in nodes:
+        snap = nd['snap']
+        if snap in sim_cache or 'iord' not in nd:
+            continue
+        try:
+            sim = _load_sim(snap)
+            box_kpc = float(sim.properties['boxsize'].in_units('kpc'))
+            sim_cache[snap] = (sim['pos'] / box_kpc, sim['iord'], box_kpc)
+        except Exception:
+            pass
+
+    # Default z_scale: spread the full Hubble time over one box width
+    if z_scale is None:
+        snap0 = nodes[0]['snap']
+        if snap0 in sim_cache:
+            box_kpc = sim_cache[snap0][2]
+        else:
+            box_kpc = 100000.0   # fallback 100 Mpc
+        z_scale = box_kpc / 13.8
+
+    for nd in nodes:
+        snap = nd['snap']
+        if snap not in sim_cache or 'iord' not in nd:
+            continue
+        pos_box, iord_snap, box_kpc = sim_cache[snap]
+
+        # Get positions of this node's tracked particles
+        mask = np.isin(iord_snap, nd['iord'])
+        if not np.any(mask):
+            continue
+        pos_kpc = pos_box[mask] * box_kpc   # (N,3) in kpc
+
+        t_lb    = _lookback_time_gyr(1.0 / (1.0 + nd['z']), params)
+        y_shift = t_lb * z_scale
+
+        col = col_main if nd['is_main'] else col_merger
+        ax.scatter(pos_kpc[:, xi], pos_kpc[:, yi] + y_shift,
+                   s=0.5, color=col, alpha=0.3, rasterized=True)
+
+    ax.set_xlabel('{0} [kpc]'.format(proj[0]))
+    ax.set_ylabel('{0} + lookback time × scale [kpc]'.format(proj[1]))
+    ax.set_title('Spatial merger tree')
+    sns.despine(ax=ax)
+
+
 def build_merger_tree(sim_dir, halo_id, output_zlast, output_zinit,
                       r_search_factor=1.0):
     """Build a merger tree by backward iord-tracking through snapshots.
@@ -973,6 +1050,7 @@ def build_merger_tree(sim_dir, halo_id, output_zlast, output_zinit,
         'z':       1.0 / aexp0 - 1.0,
         'r200':    r200_0_box,
         'is_main': True,
+        'iord':    iord0,
     })
     watch_list = [(0, iord0)]
     print('[build_merger_tree] root: halo_id={0}  npart={1}  r200={2:.1f} kpc'.format(
@@ -1082,6 +1160,7 @@ def build_merger_tree(sim_dir, halo_id, output_zlast, output_zinit,
                     'z':       z,
                     'r200':    r200_box,
                     'is_main': is_main,
+                    'iord':    found_iord[part_idx],
                 })
                 edges.append((node_idx, desc_idx, 'main' if is_main else 'merger'))
                 new_watch.append((node_idx, found_iord[part_idx]))
