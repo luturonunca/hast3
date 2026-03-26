@@ -941,15 +941,25 @@ def plot_merger_tree(nodes, edges, ax_tree, ax_mass, params,
     else:
         half_width = 1.0
 
-    # Horizontal dotted lines with redshift labels
+    # Horizontal dotted lines; label only the snapshot nearest each integer redshift
+    int_z_targets = list(range(int(np.floor(max(seen_z.keys()))) + 1))  # [0,1,2,...]
+    labelled = set()
+    for z_int in int_z_targets:
+        if not seen_z:
+            break
+        closest = min(seen_z.keys(), key=lambda z: abs(z - z_int))
+        labelled.add(closest)
     for z_val, y_sh in sorted(seen_z.items()):
         ax_tree.axhline(y_sh, color='grey', lw=0.5, ls=':', alpha=0.6, zorder=0)
-        ax_tree.text(half_width, y_sh, ' z={0:.2f}'.format(z_val),
-                     va='center', ha='left', fontsize=7, color='grey')
+        if z_val in labelled:
+            ax_tree.text(half_width, y_sh, ' z={0:.1f}'.format(z_val),
+                         va='center', ha='left', fontsize=8, color='grey')
 
-    ax_tree.set_xlabel('{0} − <{0}> [kpc]'.format(proj[0]))
-    ax_tree.set_ylabel('{0} − <{0}> + z/(1+z) × {1:.0f} [kpc]'.format(proj[1], z_scale))
+    ax_tree.set_xlabel('')
+    ax_tree.set_ylabel('')
     ax_tree.set_title('Merger tree — halo {0}'.format(halo_label))
+    ax_tree.tick_params(axis='x', which='both', bottom=False, labelbottom=False)
+    ax_tree.tick_params(axis='y', which='both', left=False, labelleft=False)
     sns.despine(ax=ax_tree)
 
 
