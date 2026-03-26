@@ -747,7 +747,7 @@ def _r200_kpc(mass_msol, params):
     Hz_si = Hz * 1e3 / 3.085677581e22             # 1/s
     G_si  = 6.674e-11                             # m^3 kg^-1 s^-2
     rho_crit_si  = 3.0 * Hz_si**2 / (8.0 * np.pi * G_si)  # kg/m^3
-    rho_crit_cgs = rho_crit_si * 1e-3 / 1e-6              # g/cm^3
+    rho_crit_cgs = rho_crit_si * 1e-3                     # g/cm^3  (1 kg/m^3 = 1e-3 g/cm^3)
     _kpc  = 3.085677581e21
     _msol = 1.9885e33
     rho_crit_msol_kpc3 = rho_crit_cgs * _kpc**3 / _msol
