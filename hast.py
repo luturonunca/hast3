@@ -754,6 +754,25 @@ def _r200_kpc(mass_msol, params):
     return (3.0 * mass_msol / (4.0 * np.pi * 200.0 * rho_crit_msol_kpc3))**(1.0 / 3.0)
 
 
+def _lookback_gyr(z_vals, params):
+    """Lookback time in Gyr for scalar or array z_vals (flat ΛCDM)."""
+    H0 = params.get('H0',     70.0)   # km/s/Mpc
+    om = params.get('omega_m', 0.3)
+    ol = params.get('omega_l', 0.7)
+    H0_gyr = H0 * 1.022e-3            # Gyr^-1
+    scalar = np.isscalar(z_vals)
+    zv = np.atleast_1d(np.asarray(z_vals, dtype=float))
+    result = np.zeros(len(zv))
+    for i, z in enumerate(zv):
+        if z <= 0.0:
+            result[i] = 0.0
+            continue
+        zz = np.linspace(0.0, z, 500)
+        intgd = 1.0 / ((1.0 + zz) * np.sqrt(om * (1.0 + zz)**3 + ol))
+        result[i] = np.trapz(intgd, zz) / H0_gyr
+    return float(result[0]) if scalar else result
+
+
 def _save_merger_tree(fname, halo_id, nodes, edges):
     """Persist merger tree nodes and edges to a JSON cache file."""
     import json
@@ -840,8 +859,6 @@ def plot_merger_tree(nodes, edges, ax_tree, ax_mass, params,
     z_scale : kpc per unit z/(1+z). Defaults to 0.1 * box_kpc of root snapshot.
     proj    : spatial axes to project, chosen from 'x', 'y', 'z'.
     """
-    ax_mass.set_visible(False)
-
     if not nodes:
         ax_tree.text(0.5, 0.5, 'No tree data',
                      transform=ax_tree.transAxes, ha='center')
@@ -989,6 +1006,53 @@ def plot_merger_tree(nodes, edges, ax_tree, ax_mass, params,
     ax_tree.tick_params(axis='x', which='both', bottom=False, labelbottom=False)
     ax_tree.tick_params(axis='y', which='both', left=False, labelleft=False)
     sns.despine(ax=ax_tree)
+
+    # --- Mass evolution plot ---
+    # Build desc->main-progenitor map to trace branch chains backward
+    desc_to_main_prog = {}
+    for (prog_idx, desc_idx, etype) in edges:
+        if etype == 'main':
+            desc_to_main_prog[desc_idx] = prog_idx
+
+    def _trace_backward(start):
+        chain = [start]
+        cur = start
+        while cur in desc_to_main_prog:
+            cur = desc_to_main_prog[cur]
+            chain.append(cur)
+        return chain  # start = lowest z, end = highest z
+
+    main_chain    = _trace_backward(0) if nodes else []
+    merger_chains = [_trace_backward(prog_idx)
+                     for (prog_idx, desc_idx, etype) in edges if etype == 'merger']
+
+    if main_chain:
+        z_main = [nodes[i]['z'] for i in main_chain]
+        t_main = _lookback_gyr(z_main, params)
+        m_main = [nodes[i]['mass'] for i in main_chain]
+        ax_mass.plot(t_main, m_main, color=col_main, lw=2)
+
+    for chain in merger_chains:
+        z_ch = [nodes[i]['z'] for i in chain]
+        t_ch = _lookback_gyr(z_ch, params)
+        m_ch = [nodes[i]['mass'] for i in chain]
+        ax_mass.plot(t_ch, m_ch, color=col_merger, lw=1, ls='--', alpha=0.7)
+
+    ax_mass.set_yscale('log')
+    ax_mass.invert_xaxis()   # lookback time 0 on the right (today)
+    ax_mass.set_xlabel('Lookback time [Gyr]')
+    ax_mass.set_ylabel('Mass [M$_\\odot$]')
+
+    # Top x-axis: redshift ticks at integer z values
+    z_max_plot = max((nodes[i]['z'] for i in main_chain), default=0.0)
+    ax_z = ax_mass.twiny()
+    ax_z.set_xlim(ax_mass.get_xlim())
+    z_int_ticks = list(range(0, int(np.floor(z_max_plot)) + 1))
+    t_int_ticks = _lookback_gyr(z_int_ticks, params)
+    ax_z.set_xticks(t_int_ticks)
+    ax_z.set_xticklabels([str(z) for z in z_int_ticks])
+    ax_z.set_xlabel('Redshift')
+    sns.despine(ax=ax_mass)
 
 
 def build_merger_tree(sim_dir, halo_ids, output_zlast, output_zinit,
