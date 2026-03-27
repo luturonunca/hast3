@@ -790,6 +790,54 @@ def _lookback_gyr(z_vals, params):
     return float(result[0]) if scalar else result
 
 
+def _halo_dynamics(pos_kpc, vel_kms, mass_msol, r200_kpc):
+    """Compute virial ratio q and spin parameter lambda for a halo.
+
+    pos_kpc   : (N,3) positions already centred on CoM, kpc
+    vel_kms   : (N,3) velocities already bulk-subtracted, km/s
+    mass_msol : (N,)  particle masses, Msol
+    r200_kpc  : virial radius, kpc
+
+    Returns (q, lam) or (None, None) if too few particles.
+    Uses the shell potential approximation (spherical symmetry).
+    G = 4.302e-6 kpc Msol^-1 (km/s)^2
+    """
+    G = 4.302e-6   # kpc Msol^-1 (km/s)^2
+    N = len(mass_msol)
+    if N < 50 or r200_kpc <= 0:
+        return None, None
+
+    r  = np.sqrt(np.sum(pos_kpc**2, axis=1))
+    v2 = np.sum(vel_kms**2, axis=1)
+
+    # Shell potential (spherical approximation, same as Bett+2007 / user convention)
+    sort    = np.argsort(r)
+    r_s     = r[sort]
+    m_s     = mass_msol[sort]
+    valid   = r_s > 0
+    r_s     = r_s[valid]
+    m_s     = m_s[valid]
+    M_enc   = np.cumsum(m_s)
+    dM      = np.diff(np.concatenate(([0.0], M_enc)))
+    outer   = np.cumsum((dM / r_s)[::-1])[::-1] - (dM / r_s)
+    Phi_s   = -G * (M_enc / r_s + outer)
+    Phi     = np.interp(r, r_s, Phi_s, left=Phi_s[0], right=Phi_s[-1])
+
+    # Virial ratio
+    Ekin = 0.5 * np.sum(mass_msol * v2)
+    Epot = 0.5 * np.sum(mass_msol * Phi)
+    q    = 2.0 * Ekin / Epot + 1.0 if Epot != 0 else None
+
+    # Spin parameter (Bullock et al. 2001)
+    L_vec = np.sum(mass_msol[:, None] * np.cross(pos_kpc, vel_kms), axis=0)
+    L_mag = np.linalg.norm(L_vec)
+    M_tot = np.sum(mass_msol)
+    V200  = np.sqrt(G * M_tot / r200_kpc)
+    lam   = L_mag / (np.sqrt(2.0) * M_tot * V200 * r200_kpc)
+
+    return q, lam
+
+
 def _save_merger_tree(fname, halo_id, nodes, edges):
     """Persist merger tree nodes and edges to a JSON cache file."""
     import json
@@ -1087,6 +1135,64 @@ def plot_merger_tree(nodes, edges, ax_tree, ax_mass, params, halo_color,
     sns.despine(ax=ax_mass)
 
 
+def plot_halo_dynamics_timeseries(tree_data, params):
+    """Two-panel figure: virial ratio q and spin lambda vs lookback time.
+
+    tree_data : list of (label, nodes, edges, color) — one entry per halo
+    params    : cosmological params dict (H0, omega_m, omega_l) for lookback time
+    Bottom x-axis: lookback time in Gyr (0 = today on the left).
+    Top x-axis: integer redshift ticks.
+    """
+    fig, (ax_q, ax_l) = pyplot.subplots(1, 2, figsize=(14, 5))
+
+    z_max_all = 0.0
+    for label, nodes, edges, color in tree_data:
+        main_nodes = [nd for nd in nodes if nd['is_main']]
+        if not main_nodes:
+            continue
+        zv  = np.array([nd['z']   for nd in main_nodes])
+        qv  = np.array([nd.get('q',   None) for nd in main_nodes], dtype=object)
+        lv  = np.array([nd.get('lam', None) for nd in main_nodes], dtype=object)
+        tv  = _lookback_gyr(zv, params)
+        z_max_all = max(z_max_all, zv.max())
+
+        # q plot — skip None values
+        q_ok = np.array([v is not None for v in qv])
+        if q_ok.any():
+            ax_q.plot(tv[q_ok], qv[q_ok].astype(float),
+                      color=color, lw=1.5, label='halo {0}'.format(label))
+
+        # lambda plot
+        l_ok = np.array([v is not None for v in lv])
+        if l_ok.any():
+            ax_l.plot(tv[l_ok], lv[l_ok].astype(float),
+                      color=color, lw=1.5, label='halo {0}'.format(label))
+
+    # virial equilibrium reference line at q=0
+    ax_q.axhline(0, color='grey', lw=0.8, ls='--', alpha=0.6)
+    ax_q.set_xlabel('Lookback time [Gyr]')
+    ax_q.set_ylabel('$q = 2E_\\mathrm{kin}/E_\\mathrm{pot} + 1$')
+    ax_q.set_title('Virial ratio')
+    ax_l.set_xlabel('Lookback time [Gyr]')
+    ax_l.set_ylabel('$\\lambda$')
+    ax_l.set_title('Spin parameter')
+
+    # Top redshift axis on both panels
+    z_int_ticks = list(range(0, int(np.floor(z_max_all)) + 1))
+    t_int_ticks = _lookback_gyr(z_int_ticks, params)
+    for ax in (ax_q, ax_l):
+        ax_z = ax.twiny()
+        ax_z.set_xlim(ax.get_xlim())
+        ax_z.set_xticks(t_int_ticks)
+        ax_z.set_xticklabels([str(z) for z in z_int_ticks])
+        ax_z.set_xlabel('Redshift')
+        sns.despine(ax=ax)
+
+    ax_l.legend(fontsize=8, loc='upper right')
+    pyplot.tight_layout()
+    return fig
+
+
 def build_merger_tree(sim_dir, halo_ids, output_zlast, output_zinit,
                       r_search_factor=1.0, z_max=6.0):
     """Build merger trees for one or more halos in a single pass through snapshots.
@@ -1138,6 +1244,8 @@ def build_merger_tree(sim_dir, halo_ids, output_zlast, output_zinit,
         return {hid: ([], []) for hid in halo_ids}
 
     pos_kpc0   = np.array(sim0['pos'])   # kpc
+    vel_kms0   = np.array(sim0['vel'])   # km/s
+    mass_all0  = np.array(sim0['mass'])  # Msol
     iord_all0  = sim0['iord']
     tree0      = KDTree(pos_kpc0)
 
@@ -1158,6 +1266,12 @@ def build_merger_tree(sim_dir, halo_ids, output_zlast, output_zinit,
         if len(iord0) == 0:
             print('[build_merger_tree] No particles found in root halo {0}'.format(hid))
             continue
+        p0_pos  = pos_kpc0[hits0]
+        p0_vel  = vel_kms0[hits0]
+        p0_mass = mass_all0[hits0]
+        com0    = np.average(p0_pos, axis=0, weights=p0_mass)
+        vbulk0  = np.average(p0_vel, axis=0, weights=p0_mass)
+        q0, lam0 = _halo_dynamics(p0_pos - com0, p0_vel - vbulk0, p0_mass, r200_0_kpc)
         root_node = {
             'snap':    output_zlast,
             'halo_id': int(row0[0]),
@@ -1167,6 +1281,8 @@ def build_merger_tree(sim_dir, halo_ids, output_zlast, output_zinit,
             'r200':    r200_0_kpc,  # kpc
             'is_main': True,
             'iord':    iord0,
+            'q':       q0,
+            'lam':     lam0,
         }
         all_nodes[hid]   = [root_node]
         all_edges[hid]   = []
@@ -1202,6 +1318,8 @@ def build_merger_tree(sim_dir, halo_ids, output_zlast, output_zinit,
             continue
 
         pos_kpc   = np.array(sim['pos'])   # kpc
+        vel_kms   = np.array(sim['vel'])   # km/s
+        mass_snap = np.array(sim['mass'])  # Msol
         iord_snap = sim['iord']
 
         for hid in active:
@@ -1215,7 +1333,9 @@ def build_merger_tree(sim_dir, halo_ids, output_zlast, output_zinit,
                     hid, os.path.basename(snap), z, len(tracked_iord), n_found))
                 if not np.any(found_mask):
                     continue
-                found_pos_kpc = pos_kpc[found_mask]   # kpc
+                found_pos_kpc = pos_kpc[found_mask]    # kpc
+                found_vel_kms = vel_kms[found_mask]    # km/s
+                found_mass    = mass_snap[found_mask]   # Msol
                 found_iord    = iord_snap[found_mask]
 
                 # Step 2: for each halo collect indices of tracked particles within R200
@@ -1282,8 +1402,17 @@ def build_merger_tree(sim_dir, halo_ids, output_zlast, output_zinit,
                     hrow      = halos[hi]
                     part_idx  = np.array(list(parts))
                     r200_kpc  = _r200_kpc(hrow[10], params)
-                    com_kpc   = np.mean(found_pos_kpc[part_idx], axis=0)
+                    p_pos     = found_pos_kpc[part_idx]
+                    p_vel     = found_vel_kms[part_idx]
+                    p_mass    = found_mass[part_idx]
+                    com_kpc   = np.average(p_pos, axis=0, weights=p_mass)
                     is_main   = (rank == 0)
+                    if is_main:
+                        vbulk    = np.average(p_vel, axis=0, weights=p_mass)
+                        q_n, l_n = _halo_dynamics(
+                            p_pos - com_kpc, p_vel - vbulk, p_mass, r200_kpc)
+                    else:
+                        q_n, l_n = None, None
                     node_idx  = len(nodes)
                     nodes.append({
                         'snap':    snap,
@@ -1294,6 +1423,8 @@ def build_merger_tree(sim_dir, halo_ids, output_zlast, output_zinit,
                         'r200':    r200_kpc,   # kpc
                         'is_main': is_main,
                         'iord':    found_iord[part_idx],
+                        'q':       q_n,
+                        'lam':     l_n,
                     })
                     edges.append((node_idx, desc_idx, 'main' if is_main else 'merger'))
                     new_watch.append((node_idx, found_iord[part_idx]))
@@ -1674,6 +1805,24 @@ def select(config_file):
                             print('| Halo id={0}: merger tree returned empty'.format(hid))
                 except Exception as e:
                     print('| [Warning] build_merger_tree failed: {0}'.format(e))
+            # Dynamics timeseries plot (q and lambda) — all halos in one figure
+            dyn_data = []
+            for k in range(len(hull_vols)):
+                if hull_safety[k]:
+                    continue
+                nodes_k, edges_k = _load_merger_tree(p.fname, hull_halo_ids[k])
+                if nodes_k:
+                    dyn_data.append((str(hull_halo_idx[k]+1), nodes_k, edges_k,
+                                     halo_colors[hull_halo_idx[k]]))
+            if dyn_data:
+                try:
+                    fig_dyn = plot_halo_dynamics_timeseries(dyn_data, params_mt)
+                    pdf.savefig(fig_dyn, dpi=100)
+                except Exception as e:
+                    print('| [Warning] dynamics timeseries plot failed: {0}'.format(e))
+                finally:
+                    pyplot.close('all')
+
             for k in range(len(hull_vols)):
                 if hull_safety[k]:
                     continue
