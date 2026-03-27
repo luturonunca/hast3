@@ -1183,6 +1183,9 @@ def plot_halo_dynamics_timeseries(tree_data, params):
             # label dot at the lowest-lookback-time point (closest to today)
             i0 = np.argmin(t_q)
             ax_q.scatter(t_q[i0], q_vals[i0], color=color, s=60, zorder=5)
+            ax_q.text(t_q[i0] - 0.2, q_vals[i0], label,
+                      color=color, fontsize=14, va='center', ha='right',
+                      fontweight='bold', clip_on=False)
 
         # lambda plot
         l_ok = np.array([v is not None for v in lv])
@@ -1192,8 +1195,9 @@ def plot_halo_dynamics_timeseries(tree_data, params):
             ax_l.plot(t_l, l_vals, color=color, lw=1.5)
             i0 = np.argmin(t_l)
             ax_l.scatter(t_l[i0], l_vals[i0], color=color, s=60, zorder=5)
-            ax_l.text(t_l[i0] + 0.15, l_vals[i0], label,
-                      color=color, fontsize=11, va='center', fontweight='bold')
+            ax_l.text(t_l[i0] - 0.2, l_vals[i0], label,
+                      color=color, fontsize=14, va='center', ha='right',
+                      fontweight='bold', clip_on=False)
 
     # virial equilibrium reference line at q=0
     ax_q.axhline(0, color='grey', lw=0.8, ls='--', alpha=0.6)
