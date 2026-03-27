@@ -1153,7 +1153,15 @@ def plot_halo_dynamics_timeseries(tree_data, params):
     Bottom x-axis: lookback time in Gyr (0 = today on the left).
     Top x-axis: integer redshift ticks.
     """
-    fig, (ax_q, ax_l) = pyplot.subplots(1, 2, figsize=(14, 5))
+    def _medfilt3(arr):
+        """3-point rolling median to suppress snapshot-to-snapshot outliers."""
+        n = len(arr)
+        out = arr.copy()
+        for i in range(n):
+            out[i] = np.median(arr[max(0, i-1):min(n, i+2)])
+        return out
+
+    fig, (ax_q, ax_l) = pyplot.subplots(1, 2, figsize=(18, 8))
 
     z_max_all = 0.0
     for label, nodes, edges, color in tree_data:
@@ -1166,16 +1174,18 @@ def plot_halo_dynamics_timeseries(tree_data, params):
         tv  = _lookback_gyr(zv, params)
         z_max_all = max(z_max_all, zv.max())
 
-        # q plot — skip None values
+        # q plot — skip None values, apply rolling median
         q_ok = np.array([v is not None for v in qv])
         if q_ok.any():
-            ax_q.plot(tv[q_ok], qv[q_ok].astype(float),
+            q_vals = _medfilt3(qv[q_ok].astype(float))
+            ax_q.plot(tv[q_ok], q_vals,
                       color=color, lw=1.5, label='halo {0}'.format(label))
 
         # lambda plot
         l_ok = np.array([v is not None for v in lv])
         if l_ok.any():
-            ax_l.plot(tv[l_ok], lv[l_ok].astype(float),
+            l_vals = _medfilt3(lv[l_ok].astype(float))
+            ax_l.plot(tv[l_ok], l_vals,
                       color=color, lw=1.5, label='halo {0}'.format(label))
 
     # virial equilibrium reference line at q=0
@@ -1415,14 +1425,19 @@ def build_merger_tree(sim_dir, halo_ids, output_zlast, output_zinit,
                     part_idx  = np.array(list(parts))
                     rvir_kpc  = _rvir_kpc(hrow[10], params)
                     p_pos     = found_pos_kpc[part_idx]
-                    p_vel     = found_vel_kms[part_idx]
                     p_mass    = found_mass[part_idx]
                     com_kpc   = np.average(p_pos, axis=0, weights=p_mass)
                     is_main   = (rank == 0)
                     if is_main:
-                        vbulk    = np.average(p_vel, axis=0, weights=p_mass)
-                        q_n, l_n = _halo_dynamics(
-                            p_pos - com_kpc, p_vel - vbulk, p_mass, rvir_kpc)
+                        # Use ALL particles within R_vir (not just tracked) for dynamics
+                        dyn_mask   = np.linalg.norm(pos_kpc - hrow[4:7], axis=1) <= rvir_kpc
+                        dyn_pos    = pos_kpc[dyn_mask]
+                        dyn_vel    = vel_kms[dyn_mask]
+                        dyn_mass   = mass_snap[dyn_mask]
+                        dyn_com    = np.average(dyn_pos,  axis=0, weights=dyn_mass)
+                        dyn_vbulk  = np.average(dyn_vel,  axis=0, weights=dyn_mass)
+                        q_n, l_n   = _halo_dynamics(
+                            dyn_pos - dyn_com, dyn_vel - dyn_vbulk, dyn_mass, rvir_kpc)
                     else:
                         q_n, l_n = None, None
                     node_idx  = len(nodes)
