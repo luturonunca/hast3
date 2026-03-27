@@ -1178,15 +1178,24 @@ def plot_halo_dynamics_timeseries(tree_data, params):
         q_ok = np.array([v is not None for v in qv])
         if q_ok.any():
             q_vals = _medfilt3(qv[q_ok].astype(float))
-            ax_q.plot(tv[q_ok], q_vals,
-                      color=color, lw=1.5, label='halo {0}'.format(label))
+            t_q    = tv[q_ok]
+            ax_q.plot(t_q, q_vals, color=color, lw=1.5)
+            # label dot at the lowest-lookback-time point (closest to today)
+            i0 = np.argmin(t_q)
+            ax_q.scatter(t_q[i0], q_vals[i0], color=color, s=60, zorder=5)
+            ax_q.text(t_q[i0] + 0.15, q_vals[i0], label,
+                      color=color, fontsize=11, va='center', fontweight='bold')
 
         # lambda plot
         l_ok = np.array([v is not None for v in lv])
         if l_ok.any():
             l_vals = _medfilt3(lv[l_ok].astype(float))
-            ax_l.plot(tv[l_ok], l_vals,
-                      color=color, lw=1.5, label='halo {0}'.format(label))
+            t_l    = tv[l_ok]
+            ax_l.plot(t_l, l_vals, color=color, lw=1.5)
+            i0 = np.argmin(t_l)
+            ax_l.scatter(t_l[i0], l_vals[i0], color=color, s=60, zorder=5)
+            ax_l.text(t_l[i0] + 0.15, l_vals[i0], label,
+                      color=color, fontsize=11, va='center', fontweight='bold')
 
     # virial equilibrium reference line at q=0
     ax_q.axhline(0, color='grey', lw=0.8, ls='--', alpha=0.6)
@@ -1213,8 +1222,6 @@ def plot_halo_dynamics_timeseries(tree_data, params):
         ax_z.set_xlabel('Redshift')
         sns.despine(ax=ax)
 
-    ax_q.legend(fontsize=12, loc='upper right')
-    ax_l.legend(fontsize=12, loc='upper right')
     pyplot.tight_layout()
     return fig
 
@@ -1640,7 +1647,9 @@ def select(config_file):
         m200_all = np.array([float(np.sum(sim_zlast['mass'][virial_zlast[i]].in_units('Msol'))) for i in range(wh1[0].size)])
         m200_mask = m200_all >= p.min_mass
         color_idx_map = np.cumsum(m200_mask) - 1
-        halo_colors = sns.color_palette("husl",int(m200_mask.sum()))
+        n_halos = int(m200_mask.sum())
+        halo_colors = (sns.color_palette("tab10", n_halos) if n_halos <= 10
+                       else sns.color_palette("tab20", n_halos))
         hull_vols = []
         hull_dens_vals = []
         hull_halo_idx = []
