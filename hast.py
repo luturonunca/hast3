@@ -995,8 +995,8 @@ def plot_merger_tree(nodes, edges, ax_tree, ax_mass, params,
         m_main   = nodes[main_nidx]['mass']
         if m_main <= 0 or m_merger <= 0:
             continue
-        ratio_n = m_main / m_merger
-        label   = '{0:.1f}:1'.format(ratio_n) if ratio_n < 1.0 else '{0:.0f}:1'.format(ratio_n)
+        ratio_n = max(m_main, m_merger) / min(m_main, m_merger)
+        label   = '{0:.0f}:1'.format(ratio_n)
         merger_labels_by_y.setdefault(node_yshift[nidx], []).append(label)
 
     for y_sh, labels in merger_labels_by_y.items():
