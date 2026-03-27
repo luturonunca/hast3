@@ -1170,9 +1170,11 @@ def plot_halo_dynamics_timeseries(tree_data, params):
 
     # virial equilibrium reference line at q=0
     ax_q.axhline(0, color='grey', lw=0.8, ls='--', alpha=0.6)
+    ax_q.set_ylim(-1.0, 1.0)
     ax_q.set_xlabel('Lookback time [Gyr]')
     ax_q.set_ylabel('$q = 2E_\\mathrm{kin}/E_\\mathrm{pot} + 1$')
     ax_q.set_title('Virial ratio')
+    ax_l.set_ylim(-0.01, 0.1)
     ax_l.set_xlabel('Lookback time [Gyr]')
     ax_l.set_ylabel('$\\lambda$')
     ax_l.set_title('Spin parameter')
