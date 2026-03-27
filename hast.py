@@ -1179,12 +1179,10 @@ def plot_halo_dynamics_timeseries(tree_data, params):
         if q_ok.any():
             q_vals = _medfilt3(qv[q_ok].astype(float))
             t_q    = tv[q_ok]
-            ax_q.plot(t_q, q_vals, color=color, lw=1.5)
+            ax_q.plot(t_q, q_vals, color=color, lw=1.5, label='halo {0}'.format(label))
             # label dot at the lowest-lookback-time point (closest to today)
             i0 = np.argmin(t_q)
             ax_q.scatter(t_q[i0], q_vals[i0], color=color, s=60, zorder=5)
-            ax_q.text(t_q[i0] + 0.15, q_vals[i0], label,
-                      color=color, fontsize=11, va='center', fontweight='bold')
 
         # lambda plot
         l_ok = np.array([v is not None for v in lv])
@@ -1203,7 +1201,7 @@ def plot_halo_dynamics_timeseries(tree_data, params):
     ax_q.set_xlabel('Lookback time [Gyr]')
     ax_q.set_ylabel('$q = 2E_\\mathrm{kin}/E_\\mathrm{pot} + 1$')
     ax_q.set_title('Virial ratio')
-    ax_l.set_ylim(-0.01, 0.1)
+    ax_l.set_ylim(-0.01, 0.25)
     ax_l.set_xlabel('Lookback time [Gyr]')
     ax_l.set_ylabel('$\\lambda$')
     ax_l.set_title('Spin parameter')
@@ -1222,6 +1220,7 @@ def plot_halo_dynamics_timeseries(tree_data, params):
         ax_z.set_xlabel('Redshift')
         sns.despine(ax=ax)
 
+    ax_q.legend(fontsize=12, loc='upper right')
     pyplot.tight_layout()
     return fig
 
