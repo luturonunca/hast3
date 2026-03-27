@@ -473,10 +473,10 @@ def halo_list_yt(sim, halo_finder, quiet=False):
     return data_sorted
 
 
-def plot_candidates(data,sim,center=[0.,0.,0.],comoving=False):
+def plot_candidates(data,sim,center=[0.,0.,0.],comoving=False,colors=None):
     sns.set_context('poster')
     sns.set_style("ticks",{"axes.grid": False,"xtick.direction":'in',"ytick.direction":'in'})
-    cp2 = sns.color_palette("husl",len(data[:,0]))
+    cp2 = colors if colors is not None else sns.color_palette("husl",len(data[:,0]))
     print('| Plotting ',len(data[:,0]),' haloes')
     fig,ax = pyplot.subplots(1,2,figsize=(18,8),sharex=True)
     proj =[['y','x'],['z','x']]
@@ -1658,7 +1658,7 @@ def select(config_file):
         hull_safety = []
         if(p.plot or p.full_analysis):
             cp = halo_colors
-            ax=plot_candidates(d[candidates[0][wh1][m200_mask],:],sim_zlast,comoving=True)
+            ax=plot_candidates(d[candidates[0][wh1][m200_mask],:],sim_zlast,comoving=True,colors=halo_colors)
             if(p.plot and not p.plot_traceback):
                 pyplot.savefig(p.fname+'.pdf',dpi=100)
             print('| ------------------------------------------------------------')
