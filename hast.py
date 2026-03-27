@@ -995,9 +995,9 @@ def plot_merger_tree(nodes, edges, ax_tree, ax_mass, params,
         m_main   = nodes[main_nidx]['mass']
         if m_main <= 0:
             continue
-        ratio = m_merger / m_main
-        ax_tree.text(node_xmean[nidx], node_yshift[nidx],
-                     '  {0:.2f}'.format(ratio),
+        ratio_n = m_main / m_merger if m_merger > 0 else 0.0
+        label   = '{0:.0f}:1'.format(ratio_n)
+        ax_tree.text(-half_width * 0.97, node_yshift[nidx], label,
                      va='center', ha='left', fontsize=8, color=col_merger)
 
     ax_tree.set_xlabel('')
@@ -1008,7 +1008,7 @@ def plot_merger_tree(nodes, edges, ax_tree, ax_mass, params,
     sns.despine(ax=ax_tree)
 
     # --- Mass evolution plot ---
-    # Build desc->main-progenitor map to trace branch chains backward
+    # Build desc->main-progenitor map to trace main branch chain backward
     desc_to_main_prog = {}
     for (prog_idx, desc_idx, etype) in edges:
         if etype == 'main':
@@ -1022,28 +1022,35 @@ def plot_merger_tree(nodes, edges, ax_tree, ax_mass, params,
             chain.append(cur)
         return chain  # start = lowest z, end = highest z
 
-    main_chain    = _trace_backward(0) if nodes else []
-    merger_chains = [_trace_backward(prog_idx)
-                     for (prog_idx, desc_idx, etype) in edges if etype == 'merger']
+    main_chain = _trace_backward(0) if nodes else []
 
     if main_chain:
-        z_main = [nodes[i]['z'] for i in main_chain]
+        z_main = np.array([nodes[i]['z'] for i in main_chain])
         t_main = _lookback_gyr(z_main, params)
-        m_main = [nodes[i]['mass'] for i in main_chain]
-        ax_mass.plot(t_main, m_main, color=col_main, lw=2)
+        m_main = np.array([nodes[i]['mass'] for i in main_chain])
 
-    for chain in merger_chains:
-        z_ch = [nodes[i]['z'] for i in chain]
-        t_ch = _lookback_gyr(z_ch, params)
-        m_ch = [nodes[i]['mass'] for i in chain]
-        ax_mass.plot(t_ch, m_ch, color=col_merger, lw=1, ls='--', alpha=0.7)
+        # Drop outliers: keep only points where mass is within 10x of local median
+        if len(m_main) >= 3:
+            med  = np.median(m_main)
+            keep = (m_main > med / 10.0) & (m_main < med * 10.0)
+        else:
+            keep = np.ones(len(m_main), dtype=bool)
+        ax_mass.plot(t_main[keep], m_main[keep], color=col_main, lw=2)
+
+    # Vertical orange line at the lookback time of each merger event
+    merger_times = []
+    for (prog_idx, desc_idx, etype) in edges:
+        if etype == 'merger':
+            merger_times.append(_lookback_gyr(nodes[prog_idx]['z'], params))
+    for t_mrg in merger_times:
+        ax_mass.axvline(t_mrg, color=col_merger, lw=1, alpha=0.7)
 
     ax_mass.set_yscale('log')
-    ax_mass.invert_xaxis()   # lookback time 0 on the right (today)
+    # today (z=0, t=0) on the LEFT; lookback time increases to the right
     ax_mass.set_xlabel('Lookback time [Gyr]')
     ax_mass.set_ylabel('Mass [M$_\\odot$]')
 
-    # Top x-axis: redshift ticks at integer z values
+    # Top x-axis: redshift ticks at integer z values, aligned to lookback times
     z_max_plot = max((nodes[i]['z'] for i in main_chain), default=0.0)
     ax_z = ax_mass.twiny()
     ax_z.set_xlim(ax_mass.get_xlim())
