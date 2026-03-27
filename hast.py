@@ -977,28 +977,36 @@ def plot_merger_tree(nodes, edges, ax_tree, ax_mass, params,
                          va='center', ha='left', fontsize=12, color='grey')
 
     # Mass ratio annotations at merger events
-    # For each merger edge, find the corresponding main node at the same snapshot/descendant
-    # Build a lookup: (desc_idx, snap) -> main node_idx
+    # Collect labels per y-level so multiple mergers at the same snapshot appear side by side
     main_at = {}   # (desc_idx, snap) -> node_idx of the main progenitor
     for (nidx, didx, etype) in edges:
         if etype == 'main':
             main_at[(didx, nodes[nidx]['snap'])] = nidx
+    merger_labels_by_y = {}   # y_shift -> [label, ...]
     for (nidx, didx, etype) in edges:
         if etype != 'merger':
             continue
-        if nidx not in node_xmean:
+        if nidx not in node_yshift:
             continue
         main_nidx = main_at.get((didx, nodes[nidx]['snap']))
         if main_nidx is None:
             continue
         m_merger = nodes[nidx]['mass']
         m_main   = nodes[main_nidx]['mass']
-        if m_main <= 0:
+        if m_main <= 0 or m_merger <= 0:
             continue
-        ratio_n = m_main / m_merger if m_merger > 0 else 0.0
-        label   = '{0:.0f}:1'.format(ratio_n)
-        ax_tree.text(-half_width * 0.97, node_yshift[nidx], label,
-                     va='center', ha='left', fontsize=8, color=col_merger)
+        ratio_n = m_main / m_merger
+        label   = '{0:.1f}:1'.format(ratio_n) if ratio_n < 1.0 else '{0:.0f}:1'.format(ratio_n)
+        merger_labels_by_y.setdefault(node_yshift[nidx], []).append(label)
+
+    for y_sh, labels in merger_labels_by_y.items():
+        ax_tree.text(-half_width * 0.97, y_sh, '   '.join(labels),
+                     va='center', ha='left', fontsize=11, color=col_merger)
+
+    if merger_labels_by_y:
+        ax_tree.text(0.02, 0.98, 'merger ratios',
+                     transform=ax_tree.transAxes,
+                     va='top', ha='left', fontsize=11, color=col_merger)
 
     ax_tree.set_xlabel('')
     ax_tree.set_ylabel('')
@@ -1629,28 +1637,46 @@ def select(config_file):
             sim_dir_mt = os.path.dirname(os.path.abspath(p.output_zlast))
             params_mt  = _read_info_params(p.output_zlast)
             # Collect uncached halo IDs and build all trees in a single snapshot pass
-            uncached_ids = [hull_halo_ids[k] for k in range(len(hull_vols))
-                            if not hull_safety[k]
-                            and _load_merger_tree(p.fname, hull_halo_ids[k])[0] is None]
+            uncached_ids = []
+            for k in range(len(hull_vols)):
+                hid = hull_halo_ids[k]
+                if hull_safety[k]:
+                    print('| Halo {0} (id={1}): skipped (MUSIC contamination risk)'.format(
+                        hull_halo_idx[k]+1, hid))
+                    continue
+                if _load_merger_tree(p.fname, hid)[0] is None:
+                    uncached_ids.append(hid)
             if uncached_ids:
-                trees = build_merger_tree(sim_dir_mt, uncached_ids,
-                                          p.output_zlast, p.output_zinit)
-                for hid, (nodes_mt, edges_mt) in trees.items():
-                    if nodes_mt:
-                        _save_merger_tree(p.fname, hid, nodes_mt, edges_mt)
+                try:
+                    trees = build_merger_tree(sim_dir_mt, uncached_ids,
+                                              p.output_zlast, p.output_zinit)
+                    for hid, (nodes_mt, edges_mt) in trees.items():
+                        if nodes_mt:
+                            _save_merger_tree(p.fname, hid, nodes_mt, edges_mt)
+                        else:
+                            print('| Halo id={0}: merger tree returned empty'.format(hid))
+                except Exception as e:
+                    print('| [Warning] build_merger_tree failed: {0}'.format(e))
             for k in range(len(hull_vols)):
                 if hull_safety[k]:
                     continue
                 halo_id_mt = hull_halo_ids[k]
                 nodes_mt, edges_mt = _load_merger_tree(p.fname, halo_id_mt)
                 if not nodes_mt:
+                    print('| Halo {0} (id={1}): no merger tree data, skipping plot'.format(
+                        hull_halo_idx[k]+1, halo_id_mt))
                     continue
-                fig_mt, (ax_t, ax_m) = pyplot.subplots(1, 2, figsize=(18, 8))
-                plot_merger_tree(nodes_mt, edges_mt, ax_t, ax_m, params_mt,
-                                 halo_label=str(hull_halo_idx[k]+1))
-                pyplot.tight_layout()
-                pdf.savefig(fig_mt, dpi=100)
-                pyplot.close(fig_mt)
+                try:
+                    fig_mt, (ax_t, ax_m) = pyplot.subplots(1, 2, figsize=(18, 8))
+                    plot_merger_tree(nodes_mt, edges_mt, ax_t, ax_m, params_mt,
+                                     halo_label=str(hull_halo_idx[k]+1))
+                    pyplot.tight_layout()
+                    pdf.savefig(fig_mt, dpi=100)
+                except Exception as e:
+                    print('| [Warning] plot_merger_tree failed for halo {0}: {1}'.format(
+                        hull_halo_idx[k]+1, e))
+                finally:
+                    pyplot.close('all')
             pdf.close()
             print('| Full analysis saved to {0}_analysis.pdf'.format(p.fname))
 
