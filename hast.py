@@ -753,22 +753,32 @@ def _read_npart_threshold(output_dir, default=20):
     return default
 
 
-def _r200_kpc(mass_msol, params):
-    """Estimate R200 in kpc from halo mass in Msol using critical density at snapshot z."""
+def _rvir_kpc(mass_msol, params):
+    """Virial radius in kpc using the Bryan & Norman (1998) redshift-dependent overdensity.
+
+    Delta_vir(z) = 18*pi^2 + 82*x - 39*x^2,  x = Omega_m(z) - 1
+    (fitting formula for flat ΛCDM, ApJ 495, 80).
+    At high z (matter dominated): Delta_vir -> 18*pi^2 ~ 178.
+    At z=0, Omega_m=0.3: Delta_vir ~ 101.
+    """
     H0   = params.get('H0',      70.0)
     aexp = params.get('aexp',     1.0)
     om   = params.get('omega_m',  0.3)
     ol   = params.get('omega_l',  0.7)
     z    = 1.0 / aexp - 1.0
-    Hz   = H0 * np.sqrt(om * (1.0 + z)**3 + ol)  # km/s/Mpc
+    E2   = om * (1.0 + z)**3 + ol
+    Hz   = H0 * np.sqrt(E2)                       # km/s/Mpc
+    om_z = om * (1.0 + z)**3 / E2                 # Omega_m(z)
+    x    = om_z - 1.0
+    delta_vir = 18.0 * np.pi**2 + 82.0 * x - 39.0 * x**2
     Hz_si = Hz * 1e3 / 3.085677581e22             # 1/s
     G_si  = 6.674e-11                             # m^3 kg^-1 s^-2
-    rho_crit_si  = 3.0 * Hz_si**2 / (8.0 * np.pi * G_si)  # kg/m^3
-    rho_crit_cgs = rho_crit_si * 1e-3                     # g/cm^3  (1 kg/m^3 = 1e-3 g/cm^3)
+    rho_crit_si  = 3.0 * Hz_si**2 / (8.0 * np.pi * G_si)
+    rho_crit_cgs = rho_crit_si * 1e-3
     _kpc  = 3.085677581e21
     _msol = 1.9885e33
     rho_crit_msol_kpc3 = rho_crit_cgs * _kpc**3 / _msol
-    return (3.0 * mass_msol / (4.0 * np.pi * 200.0 * rho_crit_msol_kpc3))**(1.0 / 3.0)
+    return (3.0 * mass_msol / (4.0 * np.pi * delta_vir * rho_crit_msol_kpc3))**(1.0 / 3.0)
 
 
 def _lookback_gyr(z_vals, params):
@@ -790,13 +800,13 @@ def _lookback_gyr(z_vals, params):
     return float(result[0]) if scalar else result
 
 
-def _halo_dynamics(pos_kpc, vel_kms, mass_msol, r200_kpc):
+def _halo_dynamics(pos_kpc, vel_kms, mass_msol, rvir_kpc):
     """Compute virial ratio q and spin parameter lambda for a halo.
 
     pos_kpc   : (N,3) positions already centred on CoM, kpc
     vel_kms   : (N,3) velocities already bulk-subtracted, km/s
     mass_msol : (N,)  particle masses, Msol
-    r200_kpc  : virial radius, kpc
+    rvir_kpc  : virial radius, kpc
 
     Returns (q, lam) or (None, None) if too few particles.
     Uses the shell potential approximation (spherical symmetry).
@@ -804,7 +814,7 @@ def _halo_dynamics(pos_kpc, vel_kms, mass_msol, r200_kpc):
     """
     G = 4.302e-6   # kpc Msol^-1 (km/s)^2
     N = len(mass_msol)
-    if N < 50 or r200_kpc <= 0:
+    if N < 50 or rvir_kpc <= 0:
         return None, None
 
     r  = np.sqrt(np.sum(pos_kpc**2, axis=1))
@@ -832,8 +842,8 @@ def _halo_dynamics(pos_kpc, vel_kms, mass_msol, r200_kpc):
     L_vec = np.sum(mass_msol[:, None] * np.cross(pos_kpc, vel_kms), axis=0)
     L_mag = np.linalg.norm(L_vec)
     M_tot = np.sum(mass_msol)
-    V200  = np.sqrt(G * M_tot / r200_kpc)
-    lam   = L_mag / (np.sqrt(2.0) * M_tot * V200 * r200_kpc)
+    V200  = np.sqrt(G * M_tot / rvir_kpc)
+    lam   = L_mag / (np.sqrt(2.0) * M_tot * V200 * rvir_kpc)
 
     return q, lam
 
@@ -972,7 +982,7 @@ def plot_merger_tree(nodes, edges, ax_tree, ax_mass, params, halo_color,
             mask = np.isin(iord_snap, nd['iord'])
         else:
             dists = np.linalg.norm(pos_kpc - np.array(nd['pos']), axis=1)
-            mask  = dists <= nd['r200']
+            mask  = dists <= nd['rvir']
         if np.any(mask):
             main_centre[snap] = (float(np.mean(pos_kpc[mask, xi])),
                                  float(np.mean(pos_kpc[mask, yi])))
@@ -993,7 +1003,7 @@ def plot_merger_tree(nodes, edges, ax_tree, ax_mass, params, halo_color,
             mask = np.isin(iord_snap, nd['iord'])
         else:
             dists = np.linalg.norm(pos_kpc - np.array(nd['pos']), axis=1)
-            mask  = dists <= nd['r200']
+            mask  = dists <= nd['rvir']
 
         if not np.any(mask):
             print('[plot_merger_tree] node halo_id={0} z={1:.2f}: no particles found'.format(
@@ -1262,8 +1272,8 @@ def build_merger_tree(sim_dir, halo_ids, output_zlast, output_zinit,
             print('[build_merger_tree] halo_id {0} not found at {1}'.format(hid, output_zlast))
             continue
         row0       = row0[0]
-        r200_0_kpc = _r200_kpc(row0[10], params0)
-        hits0      = tree0.query_radius([row0[4:7]], r_search_factor * r200_0_kpc)[0]
+        rvir_0_kpc = _rvir_kpc(row0[10], params0)
+        hits0      = tree0.query_radius([row0[4:7]], r_search_factor * rvir_0_kpc)[0]
         iord0      = iord_all0[hits0]
         if len(iord0) == 0:
             print('[build_merger_tree] No particles found in root halo {0}'.format(hid))
@@ -1273,14 +1283,14 @@ def build_merger_tree(sim_dir, halo_ids, output_zlast, output_zinit,
         p0_mass = mass_all0[hits0]
         com0    = np.average(p0_pos, axis=0, weights=p0_mass)
         vbulk0  = np.average(p0_vel, axis=0, weights=p0_mass)
-        q0, lam0 = _halo_dynamics(p0_pos - com0, p0_vel - vbulk0, p0_mass, r200_0_kpc)
+        q0, lam0 = _halo_dynamics(p0_pos - com0, p0_vel - vbulk0, p0_mass, rvir_0_kpc)
         root_node = {
             'snap':    output_zlast,
             'halo_id': int(row0[0]),
             'mass':    row0[10],
             'pos':     row0[4:7],   # kpc
             'z':       z0,
-            'r200':    r200_0_kpc,  # kpc
+            'rvir':    rvir_0_kpc,  # kpc
             'is_main': True,
             'iord':    iord0,
             'q':       q0,
@@ -1289,8 +1299,8 @@ def build_merger_tree(sim_dir, halo_ids, output_zlast, output_zinit,
         all_nodes[hid]   = [root_node]
         all_edges[hid]   = []
         watch_lists[hid] = [(0, iord0)]
-        print('[build_merger_tree] root: halo_id={0}  npart={1}  r200={2:.1f} kpc'.format(
-            hid, len(iord0), r200_0_kpc))
+        print('[build_merger_tree] root: halo_id={0}  npart={1}  rvir={2:.1f} kpc'.format(
+            hid, len(iord0), rvir_0_kpc))
 
     if not watch_lists:
         return {hid: ([], []) for hid in halo_ids}
@@ -1344,9 +1354,9 @@ def build_merger_tree(sim_dir, halo_ids, output_zlast, output_zinit,
                 # halos cols: 0=idx, 2=parent, 4:7=pos_kpc, 10=mass_msol
                 halo_parts = {}
                 for hi, hrow in enumerate(halos):
-                    r200_kpc = _r200_kpc(hrow[10], params)
+                    rvir_kpc = _rvir_kpc(hrow[10], params)
                     dists    = np.linalg.norm(found_pos_kpc - hrow[4:7], axis=1)
-                    inside   = np.where(dists <= r_search_factor * r200_kpc)[0]
+                    inside   = np.where(dists <= r_search_factor * rvir_kpc)[0]
                     if len(inside) > 0:
                         halo_parts[hi] = set(inside.tolist())
 
@@ -1403,7 +1413,7 @@ def build_merger_tree(sim_dir, halo_ids, output_zlast, output_zinit,
                 for rank, (hi, parts) in enumerate(valid):
                     hrow      = halos[hi]
                     part_idx  = np.array(list(parts))
-                    r200_kpc  = _r200_kpc(hrow[10], params)
+                    rvir_kpc  = _rvir_kpc(hrow[10], params)
                     p_pos     = found_pos_kpc[part_idx]
                     p_vel     = found_vel_kms[part_idx]
                     p_mass    = found_mass[part_idx]
@@ -1412,7 +1422,7 @@ def build_merger_tree(sim_dir, halo_ids, output_zlast, output_zinit,
                     if is_main:
                         vbulk    = np.average(p_vel, axis=0, weights=p_mass)
                         q_n, l_n = _halo_dynamics(
-                            p_pos - com_kpc, p_vel - vbulk, p_mass, r200_kpc)
+                            p_pos - com_kpc, p_vel - vbulk, p_mass, rvir_kpc)
                     else:
                         q_n, l_n = None, None
                     node_idx  = len(nodes)
@@ -1422,7 +1432,7 @@ def build_merger_tree(sim_dir, halo_ids, output_zlast, output_zinit,
                         'mass':    hrow[10],
                         'pos':     com_kpc,    # kpc
                         'z':       z,
-                        'r200':    r200_kpc,   # kpc
+                        'rvir':    rvir_kpc,   # kpc
                         'is_main': is_main,
                         'iord':    found_iord[part_idx],
                         'q':       q_n,
