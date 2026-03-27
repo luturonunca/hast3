@@ -1199,6 +1199,9 @@ def plot_halo_dynamics_timeseries(tree_data, params):
     ax_l.set_ylabel('$\\lambda$')
     ax_l.set_title('Spin parameter')
 
+    for ax in (ax_q, ax_l):
+        ax.set_xlim(0.0, 13.0)
+
     # Top redshift axis on both panels
     z_int_ticks = list(range(0, int(np.floor(z_max_all)) + 1))
     t_int_ticks = _lookback_gyr(z_int_ticks, params)
@@ -1210,7 +1213,8 @@ def plot_halo_dynamics_timeseries(tree_data, params):
         ax_z.set_xlabel('Redshift')
         sns.despine(ax=ax)
 
-    ax_l.legend(fontsize=8, loc='upper right')
+    ax_q.legend(fontsize=12, loc='upper right')
+    ax_l.legend(fontsize=12, loc='upper right')
     pyplot.tight_layout()
     return fig
 
