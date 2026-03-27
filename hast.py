@@ -843,8 +843,8 @@ def _add_redshift_top_axis(ax, params, z_ticks=(0, 0.5, 1, 2, 3, 5, 7, 10)):
     return ax2
 
 
-def plot_merger_tree(nodes, edges, ax_tree, ax_mass, params,
-                     halo_label='', z_scale=None, proj=('x', 'y'), halo_color=None):
+def plot_merger_tree(nodes, edges, ax_tree, ax_mass, params, halo_color,
+                     halo_label='', z_scale=None, proj=('x', 'y')):
     """Scatter DM particles of each tree node, y-shifted by redshift.
 
     Particles belonging to each node are scattered in the proj[0]-proj[1]
@@ -864,7 +864,7 @@ def plot_merger_tree(nodes, edges, ax_tree, ax_mass, params,
                      transform=ax_tree.transAxes, ha='center')
         return
 
-    col_main   = halo_color if halo_color is not None else '#3182bd'
+    col_main   = halo_color
     col_merger = '#e6550d'
     axis_map   = {'x': 0, 'y': 1, 'z': 2}
     xi = axis_map[proj[0]]
