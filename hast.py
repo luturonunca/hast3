@@ -184,10 +184,11 @@ class _BoxSize:
 
 class _YtSimWrapper:
     """Wraps a yt dataset so it looks like a pynbody SimSnap to select()."""
-    def __init__(self, pos_kpc, mass_msol, iord, aexp, h, omegaM, omegaL, boxsize_kpc, ds):
+    def __init__(self, pos_kpc, mass_msol, iord, vel_kms, aexp, h, omegaM, omegaL, boxsize_kpc, ds):
         self._pos  = pos_kpc    # (N,3) physical kpc
         self._mass = mass_msol  # (N,)  Msol
         self._iord = iord       # (N,)  int64
+        self._vel  = vel_kms    # (N,3) km/s
         self._ds   = ds
         self.properties = {
             'a':       aexp,
@@ -209,6 +210,7 @@ class _YtSimWrapper:
         sub._pos  = self._pos[key]
         sub._mass = self._mass[key]
         sub._iord = self._iord[key]
+        sub._vel  = self._vel[key]
         sub._ds   = self._ds
         sub.properties = self.properties
         sub.d     = sub
@@ -227,6 +229,14 @@ class _YtSimWrapper:
             return _UnitArray(self._mass,      'Msol', self._ds)
         if key == 'iord':
             return self._iord
+        if key == 'vel':
+            return _UnitArray(self._vel,       'km s^-1', self._ds)
+        if key == 'vx':
+            return _UnitArray(self._vel[:, 0], 'km s^-1', self._ds)
+        if key == 'vy':
+            return _UnitArray(self._vel[:, 1], 'km s^-1', self._ds)
+        if key == 'vz':
+            return _UnitArray(self._vel[:, 2], 'km s^-1', self._ds)
         raise KeyError(key)
 
 
@@ -240,15 +250,22 @@ def _load_sim(path):
         pos_x = ad[('DM', 'particle_position_x')].to('kpc').value
         pos_y = ad[('DM', 'particle_position_y')].to('kpc').value
         pos_z = ad[('DM', 'particle_position_z')].to('kpc').value
+        vel_x = ad[('DM', 'particle_velocity_x')].to('km/s').value
+        vel_y = ad[('DM', 'particle_velocity_y')].to('km/s').value
+        vel_z = ad[('DM', 'particle_velocity_z')].to('km/s').value
         mass  = ad[('DM', 'particle_mass')].to('Msun').value
         iord  = np.array(ad[('DM', 'particle_identity')]).astype(np.int64)
     except Exception:
         pos_x = ad[('all', 'particle_position_x')].to('kpc').value
         pos_y = ad[('all', 'particle_position_y')].to('kpc').value
         pos_z = ad[('all', 'particle_position_z')].to('kpc').value
+        vel_x = ad[('all', 'particle_velocity_x')].to('km/s').value
+        vel_y = ad[('all', 'particle_velocity_y')].to('km/s').value
+        vel_z = ad[('all', 'particle_velocity_z')].to('km/s').value
         mass  = ad[('all', 'particle_mass')].to('Msun').value
         iord  = np.array(ad[('all', 'particle_identity')]).astype(np.int64)
     pos = np.vstack((pos_x, pos_y, pos_z)).T
+    vel = np.vstack((vel_x, vel_y, vel_z)).T
     boxsize_kpc = float(ds.domain_width[0].to('kpc'))
     try:    aexp   = float(ds.scale_factor)
     except: aexp   = 1.0
@@ -258,7 +275,7 @@ def _load_sim(path):
     except: omegaM = 0.3
     try:    omegaL = float(ds.omega_lambda)
     except: omegaL = 0.7
-    return _YtSimWrapper(pos, mass, iord, aexp, h, omegaM, omegaL, boxsize_kpc, ds)
+    return _YtSimWrapper(pos, mass, iord, vel, aexp, h, omegaM, omegaL, boxsize_kpc, ds)
 
 
 # ---------------------------------------------------------------------
