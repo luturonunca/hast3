@@ -844,7 +844,7 @@ def _add_redshift_top_axis(ax, params, z_ticks=(0, 0.5, 1, 2, 3, 5, 7, 10)):
 
 
 def plot_merger_tree(nodes, edges, ax_tree, ax_mass, params,
-                     halo_label='', z_scale=None, proj=('x', 'y')):
+                     halo_label='', z_scale=None, proj=('x', 'y'), halo_color=None):
     """Scatter DM particles of each tree node, y-shifted by redshift.
 
     Particles belonging to each node are scattered in the proj[0]-proj[1]
@@ -864,7 +864,7 @@ def plot_merger_tree(nodes, edges, ax_tree, ax_mass, params,
                      transform=ax_tree.transAxes, ha='center')
         return
 
-    col_main   = '#3182bd'
+    col_main   = halo_color if halo_color is not None else '#3182bd'
     col_merger = '#e6550d'
     axis_map   = {'x': 0, 'y': 1, 'z': 2}
     xi = axis_map[proj[0]]
@@ -1669,7 +1669,8 @@ def select(config_file):
                 try:
                     fig_mt, (ax_t, ax_m) = pyplot.subplots(1, 2, figsize=(18, 8))
                     plot_merger_tree(nodes_mt, edges_mt, ax_t, ax_m, params_mt,
-                                     halo_label=str(hull_halo_idx[k]+1))
+                                     halo_label=str(hull_halo_idx[k]+1),
+                                     halo_color=halo_colors[hull_halo_idx[k]])
                     pyplot.tight_layout()
                     pdf.savefig(fig_mt, dpi=100)
                 except Exception as e:
