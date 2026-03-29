@@ -18,6 +18,7 @@ from sklearn.neighbors import KDTree
 from numpy.polynomial.polynomial import polyfit
 
 warnings.filterwarnings("ignore")
+yt.funcs.mylog.setLevel(50)
 
 mpl_major = int(matplotlib.__version__[0])
 mpl_minor = int(matplotlib.__version__[2])
