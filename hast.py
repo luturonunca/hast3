@@ -2461,17 +2461,20 @@ def decontaminate(config_file):
                     if _r200 <= 0:
                         continue
                     _r         = np.linalg.norm(_pos - _cen, axis=1)
-                    # rotation curve (skip z > z_max_rc)
+                    # rotation curve (skip z > z_max_rc); truncate at 100 kpc
+                    _r_max_rc  = 100.0   # kpc
                     if _snap_z <= z_max_rc:
-                        _sort      = np.argsort(_r)
-                        _r_s       = _r[_sort];  _m_s = _mass[_sort]
-                        _ok        = _r_s > 0
-                        _r_s       = _r_s[_ok];  _m_s = _m_s[_ok]
-                        _M_enc     = np.cumsum(_m_s)
-                        _v_circ    = np.sqrt(G_kpc * _M_enc / _r_s)
-                        _npts      = min(300, len(_r_s))
-                        _ds_idx    = np.unique(np.linspace(0, len(_r_s)-1, _npts).astype(int))
-                        rc_data.append((_snap_z, _r_s[_ds_idx], _v_circ[_ds_idx]))
+                        _in_rc     = (_r > 0) & (_r <= _r_max_rc)
+                        if _in_rc.sum() < 2:
+                            pass
+                        else:
+                            _sort      = np.argsort(_r[_in_rc])
+                            _r_s       = _r[_in_rc][_sort];  _m_s = _mass[_in_rc][_sort]
+                            _M_enc     = np.cumsum(_m_s)
+                            _v_circ    = np.sqrt(G_kpc * _M_enc / _r_s)
+                            _npts      = min(300, len(_r_s))
+                            _ds_idx    = np.unique(np.linspace(0, len(_r_s)-1, _npts).astype(int))
+                            rc_data.append((_snap_z, _r_s[_ds_idx], _v_circ[_ds_idx]))
                     # q and lambda within R200
                     _in        = _r <= _r200
                     if _in.sum() >= 50:
