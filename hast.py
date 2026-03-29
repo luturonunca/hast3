@@ -2094,7 +2094,7 @@ def decontaminate(config_file):
                 _box_kpc_prev = _box_kpc_curr
                 # Find halos matching coordinate filter around previous halo
                 # x[k],y[k],z[k] stored in code units; convert to kpc for tree query
-                halo_candidates = tree_halo.query_radius([x[k]*_box_kpc_prev,y[k]*_box_kpc_prev,z[k]*_box_kpc_prev],p.rvir_search*r200_start)[0]
+                halo_candidates = tree_halo.query_radius(np.array([[x[k]*_box_kpc_prev,y[k]*_box_kpc_prev,z[k]*_box_kpc_prev]]),p.rvir_search*r200_start)[0]
                 # Load current snapshot
                 sim_curr = _load_sim(list[j-1])
                 sim_curr = sim_curr[np.argsort(sim_curr['iord'])]
@@ -2109,7 +2109,7 @@ def decontaminate(config_file):
                     print('| Tracking stopped at aexp={0}'.format(aexp_curr))
                     break
                 # Gather particles in the previous selected halo (r200_start in kpc)
-                halo_part_prev = tree_part_prev.query_radius([x[k]*_box_kpc_prev,y[k]*_box_kpc_prev,z[k]*_box_kpc_prev],p.rvir_track*r200_start)[0]
+                halo_part_prev = tree_part_prev.query_radius(np.array([[x[k]*_box_kpc_prev,y[k]*_box_kpc_prev,z[k]*_box_kpc_prev]]),p.rvir_track*r200_start)[0]
                 # Build tree for particles
                 print('|    | npart tree               = {0:9d} ------------------'.format(len(sim_curr)))
                 tree_part_curr = KDTree(np.squeeze((sim_curr['pos'])),leaf_size=p.tree_nleaves)
@@ -2122,7 +2122,7 @@ def decontaminate(config_file):
                     # Compute R200 in kpc from clump mass (code fraction units)
                     r200_candidate = (hl[halo,10]*3./(200.*4.*math.pi))**(1.0/3.0) * _box_kpc_curr
                     # Gather particles of the halo to track
-                    halo_part_curr = tree_part_curr.query_radius(hl[halo,4:7],p.rvir_track*r200_candidate)[0]
+                    halo_part_curr = tree_part_curr.query_radius(hl[halo,4:7].reshape(1,-1),p.rvir_track*r200_candidate)[0]
                     # Match unique indices
                     matching_ids = np.where(np.in1d(sim_curr['iord'][halo_part_curr],sim_prev['iord'][halo_part_prev]))[0]
                     # Matching indices fraction
