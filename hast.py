@@ -2162,6 +2162,7 @@ def decontaminate(config_file):
                 r200_curr = r200_start
                 mass_curr = hl[id,10]
                 id_start = id
+                halo_id_start = int(hl[id, 0])   # actual clump ID for merger tree
                 to_msol = float(np.sum(sim_curr['mass'].in_units('Msol')))
                 print('| R200                      = {0:.4f} kpc'.format(r200_start))
                 print('| M200                      = {0:.2e} Msol'.format(hl[id,10]*to_msol))
@@ -2540,3 +2541,23 @@ def decontaminate(config_file):
             pyplot.tight_layout()
             pdf.savefig(fig, dpi=100)
             pyplot.close(fig)
+
+            # --- Page 5: merger tree of the tracked halo ---
+            try:
+                trees = build_merger_tree(p.output_dir, [halo_id_start],
+                                          list[-1], list[0])
+                nodes_mt, edges_mt = trees.get(halo_id_start, ([], []))
+                if nodes_mt:
+                    _save_merger_tree(p.fname, halo_id_start, nodes_mt, edges_mt)
+                    fig_mt, (ax_t, ax_m) = pyplot.subplots(1, 2, figsize=(18, 8))
+                    plot_merger_tree(nodes_mt, edges_mt, ax_t, ax_m, params_dyn,
+                                     halo_label='tracked', halo_color=cp[0])
+                    pyplot.tight_layout()
+                    pdf.savefig(fig_mt, dpi=100)
+                else:
+                    print('| [Warning] merger tree returned empty for halo {0}'.format(halo_id_start))
+            except Exception as _e:
+                print('| [Warning] merger tree failed: {0}'.format(_e))
+                _tb.print_exc()
+            finally:
+                pyplot.close('all')
