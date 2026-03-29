@@ -2404,7 +2404,7 @@ def decontaminate(config_file):
                     ax[i].scatter(unique_points_2d[:,0],unique_points_2d[:,1],
                         c=cp[4],marker='+',s=5,alpha=0.50,linewidth=0.5,label='Contaminating part initial')
                 tv = ax[i].imshow(np.log10(im),cmap='bone_r',interpolation='quadric',aspect='equal',extent=[pmin,pmax,pmin,pmax])
-            ax[0].legend(loc='upper center',frameon=False,bbox_to_anchor=(0.5, 1.10, 1.0, 0.1),ncol=2,markerscale=5.)
+            ax[0].legend(loc='upper right',frameon=False,ncol=1,fontsize=8,markerscale=1.5)
             pyplot.tight_layout()
             pdf.savefig(fig, dpi=100)
             pyplot.close(fig)
