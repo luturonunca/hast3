@@ -2436,15 +2436,19 @@ def decontaminate(config_file):
 
             # --- Pages 3 & 4: rotation curves and q/lambda dynamics ---
             # Single pass: load each tracked snapshot once, collect both datasets.
+            import traceback as _tb
             params_dyn  = _read_info_params(list[-1])
             G_kpc       = 4.302e-6   # kpc Msol^-1 (km/s)^2
             z_max_rc    = 6.0
             defined_idx = defined[0]   # original snapshot indices before NaN trim
             rc_data  = []   # (redshift, r_kpc_array, v_circ_array)
             ql_data  = []   # (lookback_gyr, q, lam)
+            print('| Dynamics plots: {0} tracked snapshots'.format(len(aexp)))
             for _i in range(len(aexp)):
                 _snap_z    = 1.0 / aexp[_i] - 1.0
                 _snap_path = list[defined_idx[_i]]
+                print('|   snap {0}/{1}  z={2:.2f}  path={3}'.format(
+                    _i+1, len(aexp), _snap_z, _snap_path))
                 try:
                     _sim       = _load_sim(_snap_path)
                     _box_kpc   = float(_sim.properties['boxsize'].in_units('kpc'))
@@ -2453,6 +2457,7 @@ def decontaminate(config_file):
                     _mass      = np.array(_sim['mass'].in_units('Msol'))
                     _vel       = np.array(_sim['vel'])
                     _r200      = _virial_radius(_pos, _mass, _box_kpc, _cen, 0.5*_box_kpc)
+                    print('|     r200={0:.1f} kpc  npart={1}'.format(_r200, len(_pos)))
                     if _r200 <= 0:
                         continue
                     _r         = np.linalg.norm(_pos - _cen, axis=1)
@@ -2480,7 +2485,9 @@ def decontaminate(config_file):
                             _tlb = _lookback_gyr(_snap_z, params_dyn)
                             ql_data.append((_tlb, _q, _lam))
                 except Exception as _e:
-                    print('| [Warning] dynamics plot: skipping {0}: {1}'.format(_snap_path, _e))
+                    print('| [Warning] dynamics plot: skipping {0}'.format(_snap_path))
+                    _tb.print_exc()
+            print('| rc_data: {0} curves  ql_data: {1} points'.format(len(rc_data), len(ql_data)))
 
             # Page 3: rotation curves colored by redshift
             sns.set_style("ticks", {"axes.grid": False, "xtick.direction": 'in', "ytick.direction": 'in'})
