@@ -2328,10 +2328,14 @@ def decontaminate(config_file):
             # --- Page 1: decontamination map (comoving Mpc) ---
             sim_zlast = _load_sim(list[-1])
             sim_zlast = sim_zlast[np.argsort(sim_zlast['iord'])]
-            hl = __halo_list_tracking(list[-1],p)
             aexp_zinit = float(sim_zinit.properties['a'])
             aexp_zlast = float(sim_zlast.properties['a'])
             zoom_part = np.where(sim_zlast['mass']<1.1*np.min(sim_zlast['mass']))
+            # Halo center at z_last from tracked coordinates (code units 0..1).
+            # x[-1]/y[-1]/z[-1] are the last-snapshot entries, guaranteed consistent
+            # with the tracking loop regardless of halo-list sort order.
+            box_kpc_zlast = float(sim_zlast.properties['boxsize'].in_units('kpc'))
+            halo_pos_comov = np.array([x[-1], y[-1], z[-1]]) * box_kpc_zlast / aexp_zlast / 1000.
             sns.set_style("ticks",{"axes.grid": False,"xtick.direction":'in',"ytick.direction":'in'})
             fig,ax = pyplot.subplots(1,2,figsize=(16,8))
             proj =[['x','y'],['x','z']]
@@ -2344,8 +2348,8 @@ def decontaminate(config_file):
                 zinit_y = np.array(sim_zinit[ydim]) / aexp_zinit / 1000.
                 zlast_x = np.array(sim_zlast[xdim]) / aexp_zlast / 1000.
                 zlast_y = np.array(sim_zlast[ydim]) / aexp_zlast / 1000.
-                hl_cx    = hl[id_start, dproj[i][0]] / aexp_zlast / 1000.
-                hl_cy    = hl[id_start, dproj[i][1]] / aexp_zlast / 1000.
+                hl_cx    = halo_pos_comov[dproj[i][0] - 4]
+                hl_cy    = halo_pos_comov[dproj[i][1] - 4]
                 zinit_cx = zinit_center[dproj[i][0]-4] / aexp_zinit / 1000.
                 zinit_cy = zinit_center[dproj[i][1]-4] / aexp_zinit / 1000.
                 r200_comov    = r200_start / aexp_zlast / 1000.
@@ -2385,9 +2389,8 @@ def decontaminate(config_file):
                 ax[i].plot(zinit_x[zoom_init][np.append(hull2d.vertices,hull2d.vertices[0])],
                     zinit_y[zoom_init][np.append(hull2d.vertices,hull2d.vertices[0])],
                     'k-',lw=1.,color=cp[3],label='Lagrangian volume zoom part')
-                # Plot main zoomed halo center
-                h1 = ax[i].scatter(hl_cx,hl_cy,c=cp[0],alpha=0.35)
-                h2 = ax[i].scatter(zinit_cx,zinit_cy,c=cp[1],alpha=0.35,zorder=10)
+                # Plot z_init centroid as x marker; z_last center shown by R200 circle
+                h2 = ax[i].scatter(zinit_cx,zinit_cy,c=cp[1],alpha=0.35,zorder=10,marker='x',s=100)
                 # Plot R200 circle
                 an = np.linspace(0,2*np.pi,100)
                 ax[i].plot(r200_comov*np.cos(an)+hl_cx,r200_comov*np.sin(an)+hl_cy,color=cp[1],label='R200',lw=1.)
@@ -2427,6 +2430,103 @@ def decontaminate(config_file):
             ax[1].legend()
             ax[1].set_xlabel('aexp')
             ax[1].set_ylabel(r'Mass [M$_{\odot}$]')
+            pyplot.tight_layout()
+            pdf.savefig(fig, dpi=100)
+            pyplot.close(fig)
+
+            # --- Pages 3 & 4: rotation curves and q/lambda dynamics ---
+            # Single pass: load each tracked snapshot once, collect both datasets.
+            params_dyn  = _read_info_params(list[-1])
+            G_kpc       = 4.302e-6   # kpc Msol^-1 (km/s)^2
+            z_max_rc    = 6.0
+            defined_idx = defined[0]   # original snapshot indices before NaN trim
+            rc_data  = []   # (redshift, r_kpc_array, v_circ_array)
+            ql_data  = []   # (lookback_gyr, q, lam)
+            for _i in range(len(aexp)):
+                _snap_z    = 1.0 / aexp[_i] - 1.0
+                _snap_path = list[defined_idx[_i]]
+                try:
+                    _sim       = _load_sim(_snap_path)
+                    _box_kpc   = float(_sim.properties['boxsize'].in_units('kpc'))
+                    _cen       = np.array([x[_i], y[_i], z[_i]]) * _box_kpc
+                    _pos       = np.array(_sim['pos'])
+                    _mass      = np.array(_sim['mass'].in_units('Msol'))
+                    _vel       = np.array(_sim['vel'])
+                    _r200      = _virial_radius(_pos, _mass, _box_kpc, _cen, 0.5*_box_kpc)
+                    if _r200 <= 0:
+                        continue
+                    _r         = np.linalg.norm(_pos - _cen, axis=1)
+                    # rotation curve (skip z > z_max_rc)
+                    if _snap_z <= z_max_rc:
+                        _sort      = np.argsort(_r)
+                        _r_s       = _r[_sort];  _m_s = _mass[_sort]
+                        _ok        = _r_s > 0
+                        _r_s       = _r_s[_ok];  _m_s = _m_s[_ok]
+                        _M_enc     = np.cumsum(_m_s)
+                        _v_circ    = np.sqrt(G_kpc * _M_enc / _r_s)
+                        _npts      = min(300, len(_r_s))
+                        _ds_idx    = np.unique(np.linspace(0, len(_r_s)-1, _npts).astype(int))
+                        rc_data.append((_snap_z, _r_s[_ds_idx], _v_circ[_ds_idx]))
+                    # q and lambda within R200
+                    _in        = _r <= _r200
+                    if _in.sum() >= 50:
+                        _p_r = _pos[_in]  - _cen
+                        _m_r = _mass[_in]
+                        _v_r = _vel[_in]
+                        _com   = np.average(_p_r, axis=0, weights=_m_r)
+                        _vbulk = np.average(_v_r, axis=0, weights=_m_r)
+                        _q, _lam = _halo_dynamics(_p_r - _com, _v_r - _vbulk, _m_r, _r200)
+                        if _q is not None:
+                            _tlb = _lookback_gyr(_snap_z, params_dyn)
+                            ql_data.append((_tlb, _q, _lam))
+                except Exception as _e:
+                    print('| [Warning] dynamics plot: skipping {0}: {1}'.format(_snap_path, _e))
+
+            # Page 3: rotation curves colored by redshift
+            sns.set_style("ticks", {"axes.grid": False, "xtick.direction": 'in', "ytick.direction": 'in'})
+            fig, ax_rc = pyplot.subplots(1, 1, figsize=(10, 8))
+            if rc_data:
+                _cmap_rc = pyplot.cm.plasma
+                _norm_rc = pyplot.Normalize(vmin=0, vmax=z_max_rc)
+                for _snap_z, _r_kpc, _v_kms in rc_data:
+                    ax_rc.plot(_r_kpc, _v_kms, color=_cmap_rc(_norm_rc(_snap_z)),
+                               lw=0.8, alpha=0.8)
+                _sm = pyplot.cm.ScalarMappable(cmap=_cmap_rc, norm=_norm_rc)
+                _sm.set_array([])
+                pyplot.colorbar(_sm, ax=ax_rc, label='Redshift')
+            ax_rc.set_xlabel('$r$ [kpc]')
+            ax_rc.set_ylabel('$V_{\\rm circ}$ [km/s]')
+            ax_rc.set_title('Rotation curves')
+            pyplot.tight_layout()
+            pdf.savefig(fig, dpi=100)
+            pyplot.close(fig)
+
+            # Page 4: q and lambda on the same axes vs lookback time
+            sns.set_style("darkgrid", {"axes.facecolor": ".9"})
+            fig, ax_ql = pyplot.subplots(1, 1, figsize=(10, 8))
+            if ql_data:
+                _t_arr   = np.array([_d[0] for _d in ql_data])
+                _q_arr   = np.array([_d[1] for _d in ql_data])
+                _lam_arr = np.array([_d[2] for _d in ql_data])
+                _srt     = np.argsort(_t_arr)
+                _t_arr   = _t_arr[_srt];  _q_arr = _q_arr[_srt];  _lam_arr = _lam_arr[_srt]
+                ax_ql.plot(_t_arr, _q_arr,   color=cp[0], lw=1.5, label='$q$')
+                ax_ql.plot(_t_arr, _lam_arr, color=cp[1], lw=1.5, label='$\\lambda$')
+                ax_ql.axhline(0, color='grey', lw=0.8, ls='--', alpha=0.6)
+                _z_max_ql    = 1.0 / aexp[0] - 1.0
+                _z_ticks_ql  = [_z for _z in range(0, int(np.floor(_z_max_ql)) + 1)]
+                _t_ticks_ql  = _lookback_gyr(_z_ticks_ql, params_dyn)
+                _ax_z_ql     = ax_ql.twiny()
+                _ax_z_ql.set_xlim(ax_ql.get_xlim())
+                _ax_z_ql.set_xticks(_t_ticks_ql)
+                _ax_z_ql.set_xticklabels([str(_zz) for _zz in _z_ticks_ql])
+                _ax_z_ql.set_xlabel('Redshift')
+            ax_ql.set_ylim(-1.0, 0.6)
+            ax_ql.set_xlim(0.0, 13.0)
+            ax_ql.set_xlabel('Lookback time [Gyr]')
+            ax_ql.set_ylabel('$q$, $\\lambda$')
+            ax_ql.legend()
+            sns.despine(ax=ax_ql)
             pyplot.tight_layout()
             pdf.savefig(fig, dpi=100)
             pyplot.close(fig)
