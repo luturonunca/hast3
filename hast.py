@@ -2170,7 +2170,7 @@ def decontaminate(config_file):
                 print('| ------------------------------------------------------------')
                 ids_frac = 1.0
                 # Find halos matching coordinate filter around previous halo
-                halo_candidates = tree_halo.query_radius(np.squeeze(hl[id,4:7]),p.rvir_search*r200_curr)[0]
+                halo_candidates = tree_halo.query_radius(hl[id,4:7].reshape(1,-1),p.rvir_search*r200_curr)[0]
                 # Filter low mass halos
                 halo_candidates = halo_candidates[hl[halo_candidates,10]*to_msol>p.halo_cutoff]
                 # Selected halo
