@@ -1899,7 +1899,7 @@ def select(config_file):
 
 class config_decontamination_obj():
     def parse_input(self, ConfigFile):
-        config = configparser.SafeConfigParser()
+        config = configparser.SafeConfigParser(inline_comment_prefixes=(';', '#'))
         config.read(ConfigFile)
 
         self.output_zinit = config.get('decontamination','output_zinit')
