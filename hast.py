@@ -2355,6 +2355,9 @@ def decontaminate(config_file):
         sim_zlast = _load_sim(list[-1])
         sim_zlast = sim_zlast[np.argsort(sim_zlast['iord'])]
         hl = __halo_list_tracking(list[-1],p)
+        # Scale factors for physical -> comoving conversion
+        aexp_zinit = float(sim_zinit.properties['a'])
+        aexp_zlast = float(sim_zlast.properties['a'])
         # Find zoomed particles
         zoom_part = np.where(sim_zlast['mass']<1.1*np.min(sim_zlast['mass']))
         cp = sns.color_palette(flatui)
@@ -2366,53 +2369,64 @@ def decontaminate(config_file):
         for i in range(len(ax)):
             x=proj[i][0]
             y=proj[i][1]
+            # Convert all positions to comoving kpc (divide physical kpc by scale factor)
+            zinit_x = np.array(sim_zinit[x]) / aexp_zinit
+            zinit_y = np.array(sim_zinit[y]) / aexp_zinit
+            zlast_x = np.array(sim_zlast[x]) / aexp_zlast
+            zlast_y = np.array(sim_zlast[y]) / aexp_zlast
+            hl_cx    = hl[id_start, dproj[i][0]] / aexp_zlast
+            hl_cy    = hl[id_start, dproj[i][1]] / aexp_zlast
+            zinit_cx = zinit_center[dproj[i][0]-4] / aexp_zinit
+            zinit_cy = zinit_center[dproj[i][1]-4] / aexp_zinit
+            r200_comov    = r200_start / aexp_zlast
+            rexclude_comov = p.rexclude / aexp_zinit
             try:
-                xmin_coarse_in_rtb = float(np.min(sim_zinit[x][region_zinit][coarse_in_rtb_init]))
-                ymin_coarse_in_rtb = float(np.min(sim_zinit[y][region_zinit][coarse_in_rtb_init]))
-                xmax_coarse_in_rtb = float(np.max(sim_zinit[x][region_zinit][coarse_in_rtb_init]))
-                ymax_coarse_in_rtb = float(np.max(sim_zinit[y][region_zinit][coarse_in_rtb_init]))
+                xmin_coarse_in_rtb = float(np.min(zinit_x[region_zinit][coarse_in_rtb_init]))
+                ymin_coarse_in_rtb = float(np.min(zinit_y[region_zinit][coarse_in_rtb_init]))
+                xmax_coarse_in_rtb = float(np.max(zinit_x[region_zinit][coarse_in_rtb_init]))
+                ymax_coarse_in_rtb = float(np.max(zinit_y[region_zinit][coarse_in_rtb_init]))
             except:
                 xmin_coarse_in_rtb = 1.0
                 ymin_coarse_in_rtb = 1.0
                 xmax_coarse_in_rtb = 0.0
                 ymax_coarse_in_rtb = 0.0
 
-            xmin = min(xmin_coarse_in_rtb,float(np.min(sim_zlast[x][zoom_part])))-0.01
-            ymin = min(ymin_coarse_in_rtb,float(np.min(sim_zlast[y][zoom_part])))-0.01
-            xmax = max(xmax_coarse_in_rtb,float(np.max(sim_zlast[x][zoom_part])))+0.01
-            ymax = max(ymax_coarse_in_rtb,float(np.max(sim_zlast[y][zoom_part])))+0.01
+            xmin = min(xmin_coarse_in_rtb,float(np.min(zlast_x[zoom_part])))-0.01
+            ymin = min(ymin_coarse_in_rtb,float(np.min(zlast_y[zoom_part])))-0.01
+            xmax = max(xmax_coarse_in_rtb,float(np.max(zlast_x[zoom_part])))+0.01
+            ymax = max(ymax_coarse_in_rtb,float(np.max(zlast_y[zoom_part])))+0.01
             pmin = min(xmin,ymin)
             pmax = max(xmax,ymax)
             ax[i].set_xlim([pmin,pmax])
             ax[i].set_ylim([pmin,pmax])
-            ax[i].set_xlabel(x+' [kpc]')
-            ax[i].set_ylabel(y+' [kpc]')
-            im,xedges,yedges = np.histogram2d(sim_zlast[x][zoom_part],sim_zlast[y][zoom_part],
+            ax[i].set_xlabel(x+' [ckpc]')
+            ax[i].set_ylabel(y+' [ckpc]')
+            im,xedges,yedges = np.histogram2d(zlast_x[zoom_part],zlast_y[zoom_part],
                 weights=np.array(sim_zlast['mass'])[zoom_part],bins=1024,range=[[pmin,pmax],[pmin,pmax]])
             im = np.rot90(im)
             # Plotting 2D Convex Hull
-            points_2d = np.squeeze([[np.array(sim_zinit[x])[region_zinit][allowed]],
-                [np.array(sim_zinit[y])[region_zinit][allowed]]]).transpose()
+            points_2d = np.squeeze([[zinit_x[region_zinit][allowed]],
+                [zinit_y[region_zinit][allowed]]]).transpose()
             hull2d = ConvexHull(points_2d)
-            ax[i].plot(np.array(sim_zinit[x])[region_zinit][allowed][np.append(hull2d.vertices,hull2d.vertices[0])],
-                np.array(sim_zinit[y])[region_zinit][allowed][np.append(hull2d.vertices,hull2d.vertices[0])],
+            ax[i].plot(zinit_x[region_zinit][allowed][np.append(hull2d.vertices,hull2d.vertices[0])],
+                zinit_y[region_zinit][allowed][np.append(hull2d.vertices,hull2d.vertices[0])],
                 'k-',lw=1.,color=cp[5],label='Lagrangian volume')
-            points_2d = np.squeeze([[np.array(sim_zinit[x])[zoom_init]],[np.array(sim_zinit[y])[zoom_init]]]).transpose()
+            points_2d = np.squeeze([[zinit_x[zoom_init]],[zinit_y[zoom_init]]]).transpose()
             hull2d = ConvexHull(points_2d)
-            ax[i].plot(np.array(sim_zinit[x])[zoom_init][np.append(hull2d.vertices,hull2d.vertices[0])],
-                np.array(sim_zinit[y])[zoom_init][np.append(hull2d.vertices,hull2d.vertices[0])],
+            ax[i].plot(zinit_x[zoom_init][np.append(hull2d.vertices,hull2d.vertices[0])],
+                zinit_y[zoom_init][np.append(hull2d.vertices,hull2d.vertices[0])],
                 'k-',lw=1.,color=cp[3],label='Lagrangian volume zoom part')
             # Plot main zoomed halo center
-            h1 = ax[i].scatter(hl[id_start,dproj[i][0]],hl[id_start,dproj[i][1]],c=cp[0],alpha=0.35)
-            h2 = ax[i].scatter(zinit_center[dproj[i][0]-4],zinit_center[dproj[i][1]-4],c=cp[1],alpha=0.35,zorder=10)
+            h1 = ax[i].scatter(hl_cx,hl_cy,c=cp[0],alpha=0.35)
+            h2 = ax[i].scatter(zinit_cx,zinit_cy,c=cp[1],alpha=0.35,zorder=10)
             # Plot R200 circle
             an = np.linspace(0,2*np.pi,100)
-            ax[i].plot(r200_start*np.cos(an)+hl[id_start,dproj[i][0]],r200_start*np.sin(an)+hl[id_start,dproj[i][1]],color=cp[1],label='R200',lw=1.)
-            ax[i].plot(p.rvir*r200_start*np.cos(an)+hl[id_start,dproj[i][0]],p.rvir*r200_start*np.sin(an)+hl[id_start,dproj[i][1]],color=cp[2],label='Rtb',lw=1.)
-            ax[i].plot(p.rexclude*np.cos(an)+zinit_center[dproj[i][0]-4],p.rexclude*np.sin(an)+zinit_center[dproj[i][1]-4],color='k',label='Rexclude',lw=1.)
+            ax[i].plot(r200_comov*np.cos(an)+hl_cx,r200_comov*np.sin(an)+hl_cy,color=cp[1],label='R200',lw=1.)
+            ax[i].plot(p.rvir*r200_comov*np.cos(an)+hl_cx,p.rvir*r200_comov*np.sin(an)+hl_cy,color=cp[2],label='Rtb',lw=1.)
+            ax[i].plot(rexclude_comov*np.cos(an)+zinit_cx,rexclude_comov*np.sin(an)+zinit_cy,color='k',label='Rexclude',lw=1.)
             # Plot contaminating particles
             if(ncoarse_in_rtb_all>0):
-                points_2d = np.vstack((np.array(sim_zinit[x])[region_zinit][coarse_in_rtb_init],np.array(sim_zinit[y])[region_zinit][coarse_in_rtb_init])).transpose()
+                points_2d = np.vstack((zinit_x[region_zinit][coarse_in_rtb_init],zinit_y[region_zinit][coarse_in_rtb_init])).transpose()
                 points_2d = np.round(points_2d*2000.)/2000.
                 unique_points_2d = __unique_rows(points_2d)
                 ax[i].scatter(unique_points_2d[:,0],unique_points_2d[:,1],
