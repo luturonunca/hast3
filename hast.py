@@ -2357,106 +2357,91 @@ def decontaminate(config_file):
                         print('[merger_tree] root: halo_id={0}  npart={1}  rvir={2:.1f} kpc'.format(
                             halo_id_start, len(_iord_root), r200_curr))
                 elif p.merger_tree and _mt_watch and _mt_cosmo is not None and _snap_z_pb <= 6.0:
+                    _MT_SAMPLE   = 10000   # subsample size — enough to identify mergers
                     _mt_params_s = dict(_mt_cosmo)
                     _mt_params_s['aexp'] = aexp_curr
+                    # Precompute host-halo centres and rvirs once per snapshot
+                    _host_idx  = np.array([_hi for _hi, _hr in enumerate(hl)
+                                           if int(_hr[2]) == int(_hr[0])])
+                    _host_cen  = hl[_host_idx, 4:7]
+                    _host_rvir = np.array([_rvir_kpc(hl[_hi, 10] * to_msol, _mt_params_s)
+                                           for _hi in _host_idx])
                     _new_watch = []
                     for (_desc_idx, _tracked_iord) in _mt_watch:
-                        _found_mask = np.isin(_iord_pb, _tracked_iord)
+                        # Subsample so isin + distance ops stay fast
+                        _ti = _tracked_iord
+                        if len(_ti) > _MT_SAMPLE:
+                            _sel = np.random.choice(len(_ti), _MT_SAMPLE, replace=False)
+                            _ti  = _ti[_sel]
+                        _found_mask = np.isin(_iord_pb, _ti)
                         _n_found    = int(np.sum(_found_mask))
-                        print('[merger_tree] snap={0}  z={1:.3f}  tracked={2}  found={3}'.format(
-                            os.path.basename(list[j-1]), _snap_z_pb, len(_tracked_iord), _n_found))
-                        if not np.any(_found_mask):
+                        print('[merger_tree] snap={0}  z={1:.3f}  sample={2}  found={3}'.format(
+                            os.path.basename(list[j-1]), _snap_z_pb, len(_ti), _n_found))
+                        if _n_found == 0:
                             continue
-                        _found_pos  = _pos_pb[_found_mask]
-                        _found_vel  = _vel_pb[_found_mask]
-                        _found_mass = _mass_pb[_found_mask]
+                        _found_pos  = _pos_pb[_found_mask]   # (N, 3)
                         _found_iord = _iord_pb[_found_mask]
-                        # Host halos (parent==index) with >= _mt_npart_thresh tracked particles
-                        _halo_parts = {}
-                        for _hi, _hrow in enumerate(hl):
-                            if int(_hrow[2]) != int(_hrow[0]):
-                                continue
-                            _rvir_hi  = _rvir_kpc(_hrow[10] * to_msol, _mt_params_s)
-                            _dists_hi = np.linalg.norm(_found_pos - _hrow[4:7], axis=1)
-                            _inside_hi = np.where(_dists_hi <= _rvir_hi)[0]
-                            if len(_inside_hi) >= _mt_npart_thresh:
-                                _halo_parts[_hi] = set(_inside_hi.tolist())
-                        if not _halo_parts:
+                        if len(_host_idx) == 0:
                             continue
-                        # Assign each tracked particle to exactly one halo
-                        _part_halos = {}
-                        for _hi, _pts in _halo_parts.items():
-                            for _p in _pts:
-                                _part_halos.setdefault(_p, []).append(_hi)
-                        _assigned = {_hi: set() for _hi in _halo_parts}
-                        for _p, _his in _part_halos.items():
-                            if len(_his) == 1:
-                                _assigned[_his[0]].add(_p)
-                                continue
-                            _his_set = set(_his)
-                            _chg = True
-                            while _chg:
-                                _chg = False
-                                for _hi in sorted(_his_set):
-                                    _pid = int(hl[_hi, 2])
-                                    for _hj in sorted(_his_set):
-                                        if _hi != _hj and int(hl[_hj, 0]) == _pid:
-                                            _his_set.discard(_hj)
-                                            _chg = True
-                                            break
-                                    if _chg:
-                                        break
-                            if len(_his_set) > 1:
-                                _best = min(_his_set,
-                                            key=lambda _hi: np.linalg.norm(
-                                                _found_pos[_p] - hl[_hi, 4:7]))
-                                _his_set = {_best}
-                            _assigned[next(iter(_his_set))].add(_p)
-                        # Drop below threshold, sort descending by particle count
-                        _valid_mt = [(_hi, _pts) for _hi, _pts in _assigned.items()
-                                     if len(_pts) >= _mt_npart_thresh]
-                        print('[merger_tree]   halos_claiming={0}  above_thresh={1}'.format(
-                            len(_assigned), len(_valid_mt)))
-                        if not _valid_mt:
+                        # Distance matrix (N, H) — tractable because N <= _MT_SAMPLE
+                        _dist_mat = np.linalg.norm(
+                            _found_pos[:, None, :] - _host_cen[None, :, :], axis=2)
+                        _in_mat   = _dist_mat <= _host_rvir[None, :]   # (N, H) bool
+                        # Overlap resolution: assign each particle to its nearest host centre
+                        _nearest  = np.argmin(_dist_mat, axis=1)        # (N,)
+                        # Count: particle counts for a halo only if inside AND nearest
+                        _counts   = np.bincount(
+                            _nearest[_in_mat[np.arange(_n_found), _nearest]],
+                            minlength=len(_host_idx))
+                        # Scale threshold to sample fraction
+                        _frac     = _n_found / max(len(_tracked_iord), 1)
+                        _thresh_s = max(1, int(_mt_npart_thresh * _frac))
+                        _valid_vi = np.where(_counts >= _thresh_s)[0]
+                        print('[merger_tree]   host_halos={0}  above_thresh={1}'.format(
+                            len(_host_idx), len(_valid_vi)))
+                        if len(_valid_vi) == 0:
                             continue
-                        _valid_mt.sort(key=lambda _x: len(_x[1]), reverse=True)
-                        for _rank, (_hi, _pts) in enumerate(_valid_mt):
-                            _hrow_mt  = hl[_hi]
-                            _part_idx = np.array(sorted(_pts))
-                            _rvir_hi  = _rvir_kpc(_hrow_mt[10] * to_msol, _mt_params_s)
-                            _p_pos    = _found_pos[_part_idx]
-                            _p_mass   = _found_mass[_part_idx]
-                            _com_hi   = np.average(_p_pos, axis=0, weights=_p_mass)
-                            _is_main  = (_rank == 0)
-                            if _is_main:
-                                _dyn_mask = np.linalg.norm(_pos_pb - _hrow_mt[4:7], axis=1) <= _rvir_hi
-                                _dyn_pos  = _pos_pb[_dyn_mask]
-                                _dyn_vel  = _vel_pb[_dyn_mask]
-                                _dyn_mass = _mass_pb[_dyn_mask]
-                                _dyn_com  = np.average(_dyn_pos, axis=0, weights=_dyn_mass)
-                                _dyn_vb   = np.average(_dyn_vel, axis=0, weights=_dyn_mass)
+                        _valid_vi = _valid_vi[np.argsort(_counts[_valid_vi])[::-1]]
+                        for _rank, _vi in enumerate(_valid_vi):
+                            _hi      = _host_idx[_vi]
+                            _hrow_mt = hl[_hi]
+                            _rvir_hi = _host_rvir[_vi]
+                            _is_main = (_rank == 0)
+                            # Dynamics from ALL particles within rvir (not just the sample)
+                            _dyn_mask = np.linalg.norm(_pos_pb - _hrow_mt[4:7], axis=1) <= _rvir_hi
+                            _dyn_pos  = _pos_pb[_dyn_mask]
+                            _dyn_vel  = _vel_pb[_dyn_mask]
+                            _dyn_mass = _mass_pb[_dyn_mask]
+                            if len(_dyn_pos) > 1:
+                                _dyn_com = np.average(_dyn_pos, axis=0, weights=_dyn_mass)
+                                _dyn_vb  = np.average(_dyn_vel, axis=0, weights=_dyn_mass)
                                 _q_n, _lam_n = _halo_dynamics(
-                                    _dyn_pos - _dyn_com, _dyn_vel - _dyn_vb, _dyn_mass, _rvir_hi)
+                                    _dyn_pos - _dyn_com, _dyn_vel - _dyn_vb,
+                                    _dyn_mass, _rvir_hi) if _is_main else (None, None)
                             else:
+                                _dyn_com = _hrow_mt[4:7]
                                 _q_n, _lam_n = None, None
+                            # Branch iords: sampled particles assigned to this halo
+                            _branch_mask = _in_mat[:, _vi] & (_nearest == _vi)
+                            _branch_iord = _found_iord[_branch_mask]
                             _node_idx = len(_mt_nodes)
                             _mt_nodes.append({
                                 'snap':    list[j-1],
                                 'halo_id': int(_hrow_mt[0]),
                                 'mass':    _hrow_mt[10] * to_msol,
-                                'pos':     _com_hi,
+                                'pos':     _dyn_com,
                                 'z':       _snap_z_pb,
                                 'rvir':    _rvir_hi,
                                 'is_main': _is_main,
-                                'iord':    _found_iord[_part_idx],
+                                'iord':    _branch_iord,
                                 'q':       _q_n,
                                 'lam':     _lam_n,
                             })
                             _mt_edges.append((_node_idx, _desc_idx,
                                               'main' if _is_main else 'merger'))
-                            _new_watch.append((_node_idx, _found_iord[_part_idx]))
-                            print('[merger_tree]   {0} halo_id={1}  npart={2}'.format(
-                                'main' if _is_main else 'merger', int(_hrow_mt[0]), len(_pts)))
+                            _new_watch.append((_node_idx, _branch_iord))
+                            print('[merger_tree]   {0} halo_id={1}  count={2}'.format(
+                                'main' if _is_main else 'merger', int(_hrow_mt[0]), _counts[_vi]))
                     _mt_watch = _new_watch
             else:
                 print('| ------------------------------------------------------------')
