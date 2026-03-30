@@ -2397,9 +2397,9 @@ def decontaminate(config_file):
                             _chg = True
                             while _chg:
                                 _chg = False
-                                for _hi in list(_his_set):
+                                for _hi in sorted(_his_set):
                                     _pid = int(hl[_hi, 2])
-                                    for _hj in list(_his_set):
+                                    for _hj in sorted(_his_set):
                                         if _hi != _hj and int(hl[_hj, 0]) == _pid:
                                             _his_set.discard(_hj)
                                             _chg = True
@@ -2411,7 +2411,7 @@ def decontaminate(config_file):
                                             key=lambda _hi: np.linalg.norm(
                                                 _found_pos[_p] - hl[_hi, 4:7]))
                                 _his_set = {_best}
-                            _assigned[list(_his_set)[0]].add(_p)
+                            _assigned[next(iter(_his_set))].add(_p)
                         # Drop below threshold, sort descending by particle count
                         _valid_mt = [(_hi, _pts) for _hi, _pts in _assigned.items()
                                      if len(_pts) >= _mt_npart_thresh]
