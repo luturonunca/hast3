@@ -2049,9 +2049,12 @@ def decontaminate(config_file):
 
     region_all_zoom = np.array([]).astype(int)
     ncoarse_in_rtb_all = 0
-    _rc_data = []   # rotation curves collected during tracking: (redshift, r_kpc, v_circ)
-    _ql_data = []   # q/lambda collected during tracking: (aexp, q, lam)
-    _G_kpc   = 4.302e-6   # kpc Msol^-1 (km/s)^2
+    _rc_data          = []   # rotation curves: (redshift, r_kpc, v_circ)
+    _ql_data          = []   # q/lambda: (aexp, q, lam)
+    _lagrange_iords   = {}   # {z_int: iord_array} — R200 particles at closest snap to each z
+    _lagrange_best_dz = {_zt: float('inf') for _zt in range(0, 7)}
+    _central_iords    = None # iords within rexclude at z_last
+    _G_kpc            = 4.302e-6   # kpc Msol^-1 (km/s)^2
 
     print('| Search radius     = {0:.2f}*R200'.format(p.rvir_search))
     print('| Traceback radius  = {0:.2f}*R200'.format(p.rvir))
@@ -2279,16 +2282,20 @@ def decontaminate(config_file):
                     idf[j-1] = np.max(ids_frac)
                 aexp[j-1] = aexp_curr
                 k = j-1
-                # Piggyback: rotation curve and q/lambda using already-loaded sim_curr
-                _snap_z_pb = 1.0 / aexp_curr - 1.0
-                _cen_pb    = hl[id, 4:7]   # kpc
-                _r_pb      = np.linalg.norm(_pos_curr - _cen_pb, axis=1)
+                # Piggyback: rotation curve, q/lambda, and Lagrangian iords using already-loaded sim_curr
+                # Use sim_curr['pos'] directly (always post-sort at this point) to avoid the
+                # pre/post-sort mismatch that existed when _pos_curr was used at j==nfiles.
+                _snap_z_pb   = 1.0 / aexp_curr - 1.0
+                _cen_pb      = hl[id, 4:7]   # kpc
+                _pos_pb      = np.array(sim_curr['pos'])
+                _mass_pb     = np.array(sim_curr['mass'].in_units('Msol'))
+                _r_pb        = np.linalg.norm(_pos_pb - _cen_pb, axis=1)
                 if _snap_z_pb <= 6.0:
                     _in_rc = (_r_pb > 0) & (_r_pb <= 100.0)
                     if _in_rc.sum() >= 2:
                         _srt   = np.argsort(_r_pb[_in_rc])
                         _r_s   = _r_pb[_in_rc][_srt]
-                        _m_s   = _mass_curr[_in_rc][_srt]
+                        _m_s   = _mass_pb[_in_rc][_srt]
                         _M_enc = np.cumsum(_m_s)
                         _vc    = np.sqrt(_G_kpc * _M_enc / _r_s)
                         _npts  = min(300, len(_r_s))
@@ -2296,14 +2303,25 @@ def decontaminate(config_file):
                         _rc_data.append((_snap_z_pb, _r_s[_dsi], _vc[_dsi]))
                 _in_ql = _r_pb <= r200_curr
                 if _in_ql.sum() >= 50:
-                    _p_r   = _pos_curr[_in_ql]  - _cen_pb
-                    _m_r   = _mass_curr[_in_ql]
+                    _p_r   = _pos_pb[_in_ql]  - _cen_pb
+                    _m_r   = _mass_pb[_in_ql]
                     _v_r   = np.array(sim_curr['vel'])[_in_ql]
                     _com   = np.average(_p_r, axis=0, weights=_m_r)
                     _vb    = np.average(_v_r, axis=0, weights=_m_r)
                     _q_pb, _lam_pb = _halo_dynamics(_p_r - _com, _v_r - _vb, _m_r, r200_curr)
                     if _q_pb is not None:
                         _ql_data.append((aexp_curr, _q_pb, _lam_pb))
+                # Lagrangian iord collection: record which particles are inside R200 at each
+                # snapshot, keeping only the snapshot closest to each integer redshift z=0..6.
+                _iord_r200_pb = np.array(sim_curr['iord'])[_r_pb <= r200_curr]
+                for _zt in range(0, 7):
+                    _dz = abs(_snap_z_pb - _zt)
+                    if _dz < _lagrange_best_dz[_zt]:
+                        _lagrange_best_dz[_zt] = _dz
+                        _lagrange_iords[_zt] = _iord_r200_pb.copy()
+                # Central iords: particles within rexclude at z_last (j==nfiles)
+                if j == nfiles:
+                    _central_iords = np.array(sim_curr['iord'])[_r_pb <= p.rexclude].copy()
             else:
                 print('| ------------------------------------------------------------')
                 print('| Tracking stopped at aexp={0}'.format(aexp_curr))
@@ -2486,7 +2504,7 @@ def decontaminate(config_file):
             fig, ax_rc = pyplot.subplots(1, 1, figsize=(10, 8))
             if rc_data:
                 _cmap_rc = pyplot.cm.plasma
-                _norm_rc = pyplot.Normalize(vmin=0, vmax=z_max_rc)
+                _norm_rc = pyplot.Normalize(vmin=0, vmax=6)
                 for _snap_z, _r_kpc, _v_kms in rc_data:
                     ax_rc.plot(_r_kpc, _v_kms, color=_cmap_rc(_norm_rc(_snap_z)),
                                lw=0.8, alpha=0.8)
@@ -2557,3 +2575,111 @@ def decontaminate(config_file):
                     _tb.print_exc()
                 finally:
                     pyplot.close('all')
+
+            # --- Pages 6 & 7: Lagrangian regions traced back to z_init ---
+            _iord_zinit_arr = np.array(sim_zinit['iord'])
+            _pos_zinit_arr  = np.array(sim_zinit['pos'])
+
+            def _zinit_pos_for_iords(_iords_in):
+                """Return z_init positions for a set of iords (sim_zinit sorted by iord)."""
+                _idx  = np.searchsorted(_iord_zinit_arr, _iords_in)
+                _idx  = np.clip(_idx, 0, len(_iord_zinit_arr) - 1)
+                _valid = _iord_zinit_arr[_idx] == _iords_in
+                return _pos_zinit_arr[_idx[_valid]]
+
+            def _hull_contour_2d(_ax, _pts3d, _xi, _yi, **kwargs):
+                """Plot the 2D convex hull outline of _pts3d projected on axes _xi, _yi."""
+                _pts2d = _pts3d[:, [_xi, _yi]]
+                if len(_pts2d) < 4:
+                    return
+                try:
+                    _h = ConvexHull(_pts2d)
+                    _v = np.append(_h.vertices, _h.vertices[0])
+                    _ax.plot(_pts2d[_v, 0], _pts2d[_v, 1], **kwargs)
+                except Exception:
+                    pass
+
+            def _hull_patch_2d(_ax, _pts3d, _xi, _yi, **kwargs):
+                """Plot a filled convex hull polygon of _pts3d projected on axes _xi, _yi."""
+                from matplotlib.patches import Polygon as _MplPoly
+                _pts2d = _pts3d[:, [_xi, _yi]]
+                if len(_pts2d) < 4:
+                    return
+                try:
+                    _h = ConvexHull(_pts2d)
+                    _verts = _pts2d[_h.vertices]
+                    _patch = _MplPoly(_verts, closed=True, **kwargs)
+                    _ax.add_patch(_patch)
+                    _v = np.append(_h.vertices, _h.vertices[0])
+                    _ax.plot(_pts2d[_v, 0], _pts2d[_v, 1],
+                             color=kwargs.get('color', kwargs.get('facecolor', 'k')),
+                             lw=1.5)
+                except Exception:
+                    pass
+
+            # Page 6: convex hull contours at each integer redshift z=0..6
+            try:
+                if _lagrange_iords:
+                    _zints_avail = sorted(_lagrange_iords.keys())
+                    _cmap_lag    = pyplot.cm.plasma
+                    _norm_lag    = pyplot.Normalize(vmin=0, vmax=6)
+                    fig6, axes6  = pyplot.subplots(1, 2, figsize=(16, 7))
+                    sns.set_style("ticks", {"axes.grid": False,
+                                            "xtick.direction": 'in',
+                                            "ytick.direction": 'in'})
+                    for _zt in _zints_avail:
+                        _pts_zt  = _zinit_pos_for_iords(_lagrange_iords[_zt])
+                        _col_zt  = _cmap_lag(_norm_lag(_zt))
+                        _lbl_zt  = 'z={0}'.format(_zt)
+                        _hull_contour_2d(axes6[0], _pts_zt, 0, 1, color=_col_zt, lw=1.5, label=_lbl_zt)
+                        _hull_contour_2d(axes6[1], _pts_zt, 0, 2, color=_col_zt, lw=1.5)
+                    axes6[0].set_xlabel('x [kpc]')
+                    axes6[0].set_ylabel('y [kpc]')
+                    axes6[1].set_xlabel('x [kpc]')
+                    axes6[1].set_ylabel('z [kpc]')
+                    for _ax6 in axes6:
+                        _ax6.set_aspect('equal')
+                    _sm6 = pyplot.cm.ScalarMappable(cmap=_cmap_lag, norm=_norm_lag)
+                    _sm6.set_array([])
+                    fig6.colorbar(_sm6, ax=axes6.tolist(), label='redshift', shrink=0.6)
+                    axes6[0].set_title('Lagrangian regions at z_init — R200 particles colored by redshift')
+                    pyplot.tight_layout()
+                    pdf.savefig(fig6, dpi=100)
+                else:
+                    print('| [Warning] No Lagrangian iords collected — skipping page 6')
+            except Exception as _e6:
+                print('| [Warning] Page 6 (Lagrangian regions) failed: {0}'.format(_e6))
+                _tb.print_exc()
+            finally:
+                pyplot.close('all')
+
+            # Page 7: full halo (R200 contour) vs central region (filled shadow) at z_init
+            try:
+                if _central_iords is not None and 0 in _lagrange_iords:
+                    _pts_full    = _zinit_pos_for_iords(_lagrange_iords[0])
+                    _pts_central = _zinit_pos_for_iords(_central_iords)
+                    fig7, axes7  = pyplot.subplots(1, 2, figsize=(16, 7))
+                    sns.set_style("ticks", {"axes.grid": False,
+                                            "xtick.direction": 'in',
+                                            "ytick.direction": 'in'})
+                    for _ax7, _xi, _yi, _xl, _yl in [
+                            (axes7[0], 0, 1, 'x [kpc]', 'y [kpc]'),
+                            (axes7[1], 0, 2, 'x [kpc]', 'z [kpc]')]:
+                        _hull_contour_2d(_ax7, _pts_full,    _xi, _yi,
+                                         color=cp[0], lw=2.0, label='R200 at z=0')
+                        _hull_patch_2d(  _ax7, _pts_central, _xi, _yi,
+                                         facecolor=cp[1], alpha=0.4, label='rexclude at z=0')
+                        _ax7.set_xlabel(_xl)
+                        _ax7.set_ylabel(_yl)
+                        _ax7.set_aspect('equal')
+                    axes7[0].legend(loc='best', frameon=False, fontsize=9)
+                    axes7[0].set_title('Lagrangian origin at z_init: full halo vs central region')
+                    pyplot.tight_layout()
+                    pdf.savefig(fig7, dpi=100)
+                else:
+                    print('| [Warning] Lagrangian shadow data missing — skipping page 7')
+            except Exception as _e7:
+                print('| [Warning] Page 7 (Lagrangian shadow) failed: {0}'.format(_e7))
+                _tb.print_exc()
+            finally:
+                pyplot.close('all')
