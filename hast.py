@@ -1375,14 +1375,17 @@ def build_merger_tree(sim_dir, halo_ids, output_zlast, output_zinit,
                 found_mass    = mass_snap[found_mask]   # Msol
                 found_iord    = iord_snap[found_mask]
 
-                # Step 2: for each halo collect indices of tracked particles within R200
+                # Step 2: for each HOST halo collect indices of tracked particles within R200.
+                # Subhalos (parent != index) are skipped; require >= 10 tracked particles.
                 # halos cols: 0=idx, 2=parent, 4:7=pos_kpc, 10=mass_msol
                 halo_parts = {}
                 for hi, hrow in enumerate(halos):
+                    if int(hrow[2]) != int(hrow[0]):   # skip subhalos
+                        continue
                     rvir_kpc = _rvir_kpc(hrow[10], params)
                     dists    = np.linalg.norm(found_pos_kpc - hrow[4:7], axis=1)
                     inside   = np.where(dists <= r_search_factor * rvir_kpc)[0]
-                    if len(inside) > 0:
+                    if len(inside) >= 10:              # require minimum 10 tracked particles
                         halo_parts[hi] = set(inside.tolist())
 
                 if not halo_parts:
