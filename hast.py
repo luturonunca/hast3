@@ -2049,12 +2049,17 @@ def decontaminate(config_file):
 
     region_all_zoom = np.array([]).astype(int)
     ncoarse_in_rtb_all = 0
-    _rc_data          = []   # rotation curves: (redshift, r_kpc, v_circ)
-    _ql_data          = []   # q/lambda: (aexp, q, lam)
-    _lagrange_iords   = {}   # {z_int: iord_array} — R200 particles at closest snap to each z
+    _rc_data          = []    # rotation curves: (redshift, r_kpc, v_circ)
+    _ql_data          = []    # q/lambda: (aexp, q, lam)
+    _lagrange_iords   = {}    # {z_int: iord_array} — R200 particles at closest snap to each z
     _lagrange_best_dz = {_zt: float('inf') for _zt in range(0, 7)}
-    _central_iords    = None # iords within rexclude at z_last
+    _central_iords    = None  # iords within rexclude at z_last
     _G_kpc            = 4.302e-6   # kpc Msol^-1 (km/s)^2
+    _mt_nodes         = []    # merger tree nodes collected during tracking loop
+    _mt_edges         = []    # merger tree edges collected during tracking loop
+    _mt_watch         = []    # [(parent_node_idx, tracked_iord_array)]
+    _mt_cosmo         = None  # cosmological params (H0/omega_m/omega_l), read once at j==nfiles
+    _mt_npart_thresh  = 20    # min tracked particles for a halo to appear in the tree
 
     print('| Search radius     = {0:.2f}*R200'.format(p.rvir_search))
     print('| Traceback radius  = {0:.2f}*R200'.format(p.rvir))
@@ -2282,14 +2287,16 @@ def decontaminate(config_file):
                     idf[j-1] = np.max(ids_frac)
                 aexp[j-1] = aexp_curr
                 k = j-1
-                # Piggyback: rotation curve, q/lambda, and Lagrangian iords using already-loaded sim_curr
-                # Use sim_curr['pos'] directly (always post-sort at this point) to avoid the
-                # pre/post-sort mismatch that existed when _pos_curr was used at j==nfiles.
+                # Piggyback: all analysis using already-loaded sim_curr — no re-loading.
+                # Arrays are from post-sort sim_curr (safe at all j values).
                 _snap_z_pb   = 1.0 / aexp_curr - 1.0
                 _cen_pb      = hl[id, 4:7]   # kpc
                 _pos_pb      = np.array(sim_curr['pos'])
                 _mass_pb     = np.array(sim_curr['mass'].in_units('Msol'))
+                _vel_pb      = np.array(sim_curr['vel'])
+                _iord_pb     = np.array(sim_curr['iord'])
                 _r_pb        = np.linalg.norm(_pos_pb - _cen_pb, axis=1)
+                # Rotation curves (z <= 6, r <= 100 kpc)
                 if _snap_z_pb <= 6.0:
                     _in_rc = (_r_pb > 0) & (_r_pb <= 100.0)
                     if _in_rc.sum() >= 2:
@@ -2301,27 +2308,156 @@ def decontaminate(config_file):
                         _npts  = min(300, len(_r_s))
                         _dsi   = np.unique(np.linspace(0, len(_r_s)-1, _npts).astype(int))
                         _rc_data.append((_snap_z_pb, _r_s[_dsi], _vc[_dsi]))
+                # q/lambda (within R200)
                 _in_ql = _r_pb <= r200_curr
                 if _in_ql.sum() >= 50:
                     _p_r   = _pos_pb[_in_ql]  - _cen_pb
                     _m_r   = _mass_pb[_in_ql]
-                    _v_r   = np.array(sim_curr['vel'])[_in_ql]
+                    _v_r   = _vel_pb[_in_ql]
                     _com   = np.average(_p_r, axis=0, weights=_m_r)
                     _vb    = np.average(_v_r, axis=0, weights=_m_r)
                     _q_pb, _lam_pb = _halo_dynamics(_p_r - _com, _v_r - _vb, _m_r, r200_curr)
                     if _q_pb is not None:
                         _ql_data.append((aexp_curr, _q_pb, _lam_pb))
-                # Lagrangian iord collection: record which particles are inside R200 at each
-                # snapshot, keeping only the snapshot closest to each integer redshift z=0..6.
-                _iord_r200_pb = np.array(sim_curr['iord'])[_r_pb <= r200_curr]
+                # Lagrangian iord collection: closest snapshot to each integer z=0..6
+                _iord_r200_pb = _iord_pb[_r_pb <= r200_curr]
                 for _zt in range(0, 7):
                     _dz = abs(_snap_z_pb - _zt)
                     if _dz < _lagrange_best_dz[_zt]:
                         _lagrange_best_dz[_zt] = _dz
                         _lagrange_iords[_zt] = _iord_r200_pb.copy()
-                # Central iords: particles within rexclude at z_last (j==nfiles)
+                # Merger tree — seeded at j==nfiles, tracked at all subsequent steps
                 if j == nfiles:
-                    _central_iords = np.array(sim_curr['iord'])[_r_pb <= p.rexclude].copy()
+                    _central_iords = _iord_pb[_r_pb <= p.rexclude].copy()
+                    if p.merger_tree:
+                        _mt_cosmo        = _read_info_params(list[j-1])
+                        _mt_npart_thresh = _read_npart_threshold(list[j-1])
+                        _in_r200_root    = _r_pb <= r200_curr
+                        _iord_root = _iord_pb[_in_r200_root]
+                        _pos_root  = _pos_pb[_in_r200_root]
+                        _vel_root  = _vel_pb[_in_r200_root]
+                        _mass_root = _mass_pb[_in_r200_root]
+                        _com_r     = np.average(_pos_root, axis=0, weights=_mass_root)
+                        _vbulk_r   = np.average(_vel_root, axis=0, weights=_mass_root)
+                        _q_r, _lam_r = _halo_dynamics(
+                            _pos_root - _com_r, _vel_root - _vbulk_r, _mass_root, r200_curr)
+                        _mt_nodes.append({
+                            'snap':    list[j-1],
+                            'halo_id': halo_id_start,
+                            'mass':    hl[id, 10] * to_msol,
+                            'pos':     hl[id, 4:7].copy(),
+                            'z':       _snap_z_pb,
+                            'rvir':    r200_curr,
+                            'is_main': True,
+                            'iord':    _iord_root,
+                            'q':       _q_r,
+                            'lam':     _lam_r,
+                        })
+                        _mt_watch = [(0, _iord_root.copy())]
+                        print('[merger_tree] root: halo_id={0}  npart={1}  rvir={2:.1f} kpc'.format(
+                            halo_id_start, len(_iord_root), r200_curr))
+                elif p.merger_tree and _mt_watch and _mt_cosmo is not None and _snap_z_pb <= 6.0:
+                    _mt_params_s = dict(_mt_cosmo)
+                    _mt_params_s['aexp'] = aexp_curr
+                    _new_watch = []
+                    for (_desc_idx, _tracked_iord) in _mt_watch:
+                        _found_mask = np.isin(_iord_pb, _tracked_iord)
+                        _n_found    = int(np.sum(_found_mask))
+                        print('[merger_tree] snap={0}  z={1:.3f}  tracked={2}  found={3}'.format(
+                            os.path.basename(list[j-1]), _snap_z_pb, len(_tracked_iord), _n_found))
+                        if not np.any(_found_mask):
+                            continue
+                        _found_pos  = _pos_pb[_found_mask]
+                        _found_vel  = _vel_pb[_found_mask]
+                        _found_mass = _mass_pb[_found_mask]
+                        _found_iord = _iord_pb[_found_mask]
+                        # Host halos (parent==index) with >= _mt_npart_thresh tracked particles
+                        _halo_parts = {}
+                        for _hi, _hrow in enumerate(hl):
+                            if int(_hrow[2]) != int(_hrow[0]):
+                                continue
+                            _rvir_hi  = _rvir_kpc(_hrow[10] * to_msol, _mt_params_s)
+                            _dists_hi = np.linalg.norm(_found_pos - _hrow[4:7], axis=1)
+                            _inside_hi = np.where(_dists_hi <= _rvir_hi)[0]
+                            if len(_inside_hi) >= _mt_npart_thresh:
+                                _halo_parts[_hi] = set(_inside_hi.tolist())
+                        if not _halo_parts:
+                            continue
+                        # Assign each tracked particle to exactly one halo
+                        _part_halos = {}
+                        for _hi, _pts in _halo_parts.items():
+                            for _p in _pts:
+                                _part_halos.setdefault(_p, []).append(_hi)
+                        _assigned = {_hi: set() for _hi in _halo_parts}
+                        for _p, _his in _part_halos.items():
+                            if len(_his) == 1:
+                                _assigned[_his[0]].add(_p)
+                                continue
+                            _his_set = set(_his)
+                            _chg = True
+                            while _chg:
+                                _chg = False
+                                for _hi in list(_his_set):
+                                    _pid = int(hl[_hi, 2])
+                                    for _hj in list(_his_set):
+                                        if _hi != _hj and int(hl[_hj, 0]) == _pid:
+                                            _his_set.discard(_hj)
+                                            _chg = True
+                                            break
+                                    if _chg:
+                                        break
+                            if len(_his_set) > 1:
+                                _best = min(_his_set,
+                                            key=lambda _hi: np.linalg.norm(
+                                                _found_pos[_p] - hl[_hi, 4:7]))
+                                _his_set = {_best}
+                            _assigned[list(_his_set)[0]].add(_p)
+                        # Drop below threshold, sort descending by particle count
+                        _valid_mt = [(_hi, _pts) for _hi, _pts in _assigned.items()
+                                     if len(_pts) >= _mt_npart_thresh]
+                        print('[merger_tree]   halos_claiming={0}  above_thresh={1}'.format(
+                            len(_assigned), len(_valid_mt)))
+                        if not _valid_mt:
+                            continue
+                        _valid_mt.sort(key=lambda _x: len(_x[1]), reverse=True)
+                        for _rank, (_hi, _pts) in enumerate(_valid_mt):
+                            _hrow_mt  = hl[_hi]
+                            _part_idx = np.array(list(_pts))
+                            _rvir_hi  = _rvir_kpc(_hrow_mt[10] * to_msol, _mt_params_s)
+                            _p_pos    = _found_pos[_part_idx]
+                            _p_mass   = _found_mass[_part_idx]
+                            _com_hi   = np.average(_p_pos, axis=0, weights=_p_mass)
+                            _is_main  = (_rank == 0)
+                            if _is_main:
+                                _dyn_mask = np.linalg.norm(_pos_pb - _hrow_mt[4:7], axis=1) <= _rvir_hi
+                                _dyn_pos  = _pos_pb[_dyn_mask]
+                                _dyn_vel  = _vel_pb[_dyn_mask]
+                                _dyn_mass = _mass_pb[_dyn_mask]
+                                _dyn_com  = np.average(_dyn_pos, axis=0, weights=_dyn_mass)
+                                _dyn_vb   = np.average(_dyn_vel, axis=0, weights=_dyn_mass)
+                                _q_n, _lam_n = _halo_dynamics(
+                                    _dyn_pos - _dyn_com, _dyn_vel - _dyn_vb, _dyn_mass, _rvir_hi)
+                            else:
+                                _q_n, _lam_n = None, None
+                            _node_idx = len(_mt_nodes)
+                            _mt_nodes.append({
+                                'snap':    list[j-1],
+                                'halo_id': int(_hrow_mt[0]),
+                                'mass':    _hrow_mt[10] * to_msol,
+                                'pos':     _com_hi,
+                                'z':       _snap_z_pb,
+                                'rvir':    _rvir_hi,
+                                'is_main': _is_main,
+                                'iord':    _found_iord[_part_idx],
+                                'q':       _q_n,
+                                'lam':     _lam_n,
+                            })
+                            _mt_edges.append((_node_idx, _desc_idx,
+                                              'main' if _is_main else 'merger'))
+                            _new_watch.append((_node_idx, _found_iord[_part_idx]))
+                            print('[merger_tree]   {0} halo_id={1}  npart={2}'.format(
+                                'main' if _is_main else 'merger', int(_hrow_mt[0]), len(_pts)))
+                    _mt_watch = _new_watch
             else:
                 print('| ------------------------------------------------------------')
                 print('| Tracking stopped at aexp={0}'.format(aexp_curr))
@@ -2553,15 +2689,10 @@ def decontaminate(config_file):
                 print('| Merger tree disabled (merger_tree=False)')
             else:
                 try:
-                    # Load from cache if available; only build if cache is missing
-                    nodes_mt, edges_mt = _load_merger_tree(p.fname, halo_id_start)
-                    if nodes_mt is None:
-                        print('| Building merger tree for halo {0}...'.format(halo_id_start))
-                        trees = build_merger_tree(p.output_dir, [halo_id_start],
-                                                  list[-1], list[0])
-                        nodes_mt, edges_mt = trees.get(halo_id_start, ([], []))
-                        if nodes_mt:
-                            _save_merger_tree(p.fname, halo_id_start, nodes_mt, edges_mt)
+                    # Merger tree was collected during the tracking loop — no re-loading needed.
+                    nodes_mt, edges_mt = _mt_nodes, _mt_edges
+                    if nodes_mt:
+                        _save_merger_tree(p.fname, halo_id_start, nodes_mt, edges_mt)
                     if nodes_mt:
                         fig_mt, (ax_t, ax_m) = pyplot.subplots(1, 2, figsize=(18, 8))
                         plot_merger_tree(nodes_mt, edges_mt, ax_t, ax_m, params_dyn,
