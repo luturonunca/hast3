@@ -2422,7 +2422,7 @@ def decontaminate(config_file):
                         _valid_mt.sort(key=lambda _x: len(_x[1]), reverse=True)
                         for _rank, (_hi, _pts) in enumerate(_valid_mt):
                             _hrow_mt  = hl[_hi]
-                            _part_idx = np.array(list(_pts))
+                            _part_idx = np.array(sorted(_pts))
                             _rvir_hi  = _rvir_kpc(_hrow_mt[10] * to_msol, _mt_params_s)
                             _p_pos    = _found_pos[_part_idx]
                             _p_mass   = _found_mass[_part_idx]
