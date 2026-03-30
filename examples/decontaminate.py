@@ -23,6 +23,7 @@ Example config file (decontaminate.conf):
   halo_massfrac   = 0.10    ; minimum companion mass as fraction of tracked halo (default 0.10)
   rank_function   = mass    ; halo ranking criterion (default mass)
   plot            = true    ; produce diagnostic PDF plots (default true)
+  merger_tree     = true    ; build/cache merger tree page in PDF (default true; set false to skip expensive build)
   tree_nleaves    = 100     ; KDTree leaf size (default 100)
   point_shift     = 0,0,0   ; MUSIC integer point shift (default 0,0,0)
   point_shift_lmin = 1      ; level at which point_shift is defined (default 1)

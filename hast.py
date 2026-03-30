@@ -1966,6 +1966,10 @@ class config_decontamination_obj():
             self.rank_function = config.get('decontamination','rank_function')
         except:
             self.rank_function = 'mass'
+        try:
+            self.merger_tree = config.getboolean('decontamination','merger_tree')
+        except:
+            self.merger_tree = True
 
 
 def __halo_list_tracking(output,conf):
@@ -2042,6 +2046,9 @@ def decontaminate(config_file):
 
     region_all_zoom = np.array([]).astype(int)
     ncoarse_in_rtb_all = 0
+    _rc_data = []   # rotation curves collected during tracking: (redshift, r_kpc, v_circ)
+    _ql_data = []   # q/lambda collected during tracking: (aexp, q, lam)
+    _G_kpc   = 4.302e-6   # kpc Msol^-1 (km/s)^2
 
     print('| Search radius     = {0:.2f}*R200'.format(p.rvir_search))
     print('| Traceback radius  = {0:.2f}*R200'.format(p.rvir))
@@ -2269,6 +2276,31 @@ def decontaminate(config_file):
                     idf[j-1] = np.max(ids_frac)
                 aexp[j-1] = aexp_curr
                 k = j-1
+                # Piggyback: rotation curve and q/lambda using already-loaded sim_curr
+                _snap_z_pb = 1.0 / aexp_curr - 1.0
+                _cen_pb    = hl[id, 4:7]   # kpc
+                _r_pb      = np.linalg.norm(_pos_curr - _cen_pb, axis=1)
+                if _snap_z_pb <= 6.0:
+                    _in_rc = (_r_pb > 0) & (_r_pb <= 100.0)
+                    if _in_rc.sum() >= 2:
+                        _srt   = np.argsort(_r_pb[_in_rc])
+                        _r_s   = _r_pb[_in_rc][_srt]
+                        _m_s   = _mass_curr[_in_rc][_srt]
+                        _M_enc = np.cumsum(_m_s)
+                        _vc    = np.sqrt(_G_kpc * _M_enc / _r_s)
+                        _npts  = min(300, len(_r_s))
+                        _dsi   = np.unique(np.linspace(0, len(_r_s)-1, _npts).astype(int))
+                        _rc_data.append((_snap_z_pb, _r_s[_dsi], _vc[_dsi]))
+                _in_ql = _r_pb <= r200_curr
+                if _in_ql.sum() >= 50:
+                    _p_r   = _pos_curr[_in_ql]  - _cen_pb
+                    _m_r   = _mass_curr[_in_ql]
+                    _v_r   = np.array(sim_curr['vel'])[_in_ql]
+                    _com   = np.average(_p_r, axis=0, weights=_m_r)
+                    _vb    = np.average(_v_r, axis=0, weights=_m_r)
+                    _q_pb, _lam_pb = _halo_dynamics(_p_r - _com, _v_r - _vb, _m_r, r200_curr)
+                    if _q_pb is not None:
+                        _ql_data.append((aexp_curr, _q_pb, _lam_pb))
             else:
                 print('| ------------------------------------------------------------')
                 print('| Tracking stopped at aexp={0}'.format(aexp_curr))
@@ -2436,62 +2468,15 @@ def decontaminate(config_file):
             pyplot.close(fig)
 
             # --- Pages 3 & 4: rotation curves and q/lambda dynamics ---
-            # Single pass: load each tracked snapshot once, collect both datasets.
+            # Data already collected during the tracking loop — no re-loading needed.
             import traceback as _tb
-            params_dyn  = _read_info_params(list[-1])
-            G_kpc       = 4.302e-6   # kpc Msol^-1 (km/s)^2
-            z_max_rc    = 6.0
-            defined_idx = defined[0]   # original snapshot indices before NaN trim
-            rc_data  = []   # (redshift, r_kpc_array, v_circ_array)
-            ql_data  = []   # (lookback_gyr, q, lam)
-            print('| Dynamics plots: {0} tracked snapshots'.format(len(aexp)))
-            for _i in range(len(aexp)):
-                _snap_z    = 1.0 / aexp[_i] - 1.0
-                _snap_path = list[defined_idx[_i]]
-                print('|   snap {0}/{1}  z={2:.2f}  path={3}'.format(
-                    _i+1, len(aexp), _snap_z, _snap_path))
-                try:
-                    _sim       = _load_sim(_snap_path)
-                    _box_kpc   = float(_sim.properties['boxsize'].in_units('kpc'))
-                    _cen       = np.array([x[_i], y[_i], z[_i]]) * _box_kpc
-                    _pos       = np.array(_sim['pos'])
-                    _mass      = np.array(_sim['mass'].in_units('Msol'))
-                    _vel       = np.array(_sim['vel'])
-                    _r200      = _virial_radius(_pos, _mass, _box_kpc, _cen, 0.5*_box_kpc)
-                    print('|     r200={0:.1f} kpc  npart={1}'.format(_r200, len(_pos)))
-                    if _r200 <= 0:
-                        continue
-                    _r         = np.linalg.norm(_pos - _cen, axis=1)
-                    # rotation curve (skip z > z_max_rc); truncate at 100 kpc
-                    _r_max_rc  = 100.0   # kpc
-                    if _snap_z <= z_max_rc:
-                        _in_rc     = (_r > 0) & (_r <= _r_max_rc)
-                        if _in_rc.sum() < 2:
-                            pass
-                        else:
-                            _sort      = np.argsort(_r[_in_rc])
-                            _r_s       = _r[_in_rc][_sort];  _m_s = _mass[_in_rc][_sort]
-                            _M_enc     = np.cumsum(_m_s)
-                            _v_circ    = np.sqrt(G_kpc * _M_enc / _r_s)
-                            _npts      = min(300, len(_r_s))
-                            _ds_idx    = np.unique(np.linspace(0, len(_r_s)-1, _npts).astype(int))
-                            rc_data.append((_snap_z, _r_s[_ds_idx], _v_circ[_ds_idx]))
-                    # q and lambda within R200
-                    _in        = _r <= _r200
-                    if _in.sum() >= 50:
-                        _p_r = _pos[_in]  - _cen
-                        _m_r = _mass[_in]
-                        _v_r = _vel[_in]
-                        _com   = np.average(_p_r, axis=0, weights=_m_r)
-                        _vbulk = np.average(_v_r, axis=0, weights=_m_r)
-                        _q, _lam = _halo_dynamics(_p_r - _com, _v_r - _vbulk, _m_r, _r200)
-                        if _q is not None:
-                            _tlb = _lookback_gyr(_snap_z, params_dyn)
-                            ql_data.append((_tlb, _q, _lam))
-                except Exception as _e:
-                    print('| [Warning] dynamics plot: skipping {0}'.format(_snap_path))
-                    _tb.print_exc()
-            print('| rc_data: {0} curves  ql_data: {1} points'.format(len(rc_data), len(ql_data)))
+            params_dyn = _read_info_params(list[-1])
+            rc_data    = _rc_data
+            # Convert stored aexp values to lookback time for q/lambda plot
+            ql_data    = [(_lookback_gyr(1.0/_a - 1.0, params_dyn), _q, _l)
+                          for _a, _q, _l in _ql_data]
+            print('| rc_data: {0} curves  ql_data: {1} points'.format(
+                len(rc_data), len(ql_data)))
 
             # Page 3: rotation curves colored by redshift
             sns.set_style("ticks", {"axes.grid": False, "xtick.direction": 'in', "ytick.direction": 'in'})
@@ -2543,21 +2528,29 @@ def decontaminate(config_file):
             pyplot.close(fig)
 
             # --- Page 5: merger tree of the tracked halo ---
-            try:
-                trees = build_merger_tree(p.output_dir, [halo_id_start],
-                                          list[-1], list[0])
-                nodes_mt, edges_mt = trees.get(halo_id_start, ([], []))
-                if nodes_mt:
-                    _save_merger_tree(p.fname, halo_id_start, nodes_mt, edges_mt)
-                    fig_mt, (ax_t, ax_m) = pyplot.subplots(1, 2, figsize=(18, 8))
-                    plot_merger_tree(nodes_mt, edges_mt, ax_t, ax_m, params_dyn,
-                                     halo_label='tracked', halo_color=cp[0])
-                    pyplot.tight_layout()
-                    pdf.savefig(fig_mt, dpi=100)
-                else:
-                    print('| [Warning] merger tree returned empty for halo {0}'.format(halo_id_start))
-            except Exception as _e:
-                print('| [Warning] merger tree failed: {0}'.format(_e))
-                _tb.print_exc()
-            finally:
-                pyplot.close('all')
+            if not p.merger_tree:
+                print('| Merger tree disabled (merger_tree=False)')
+            else:
+                try:
+                    # Load from cache if available; only build if cache is missing
+                    nodes_mt, edges_mt = _load_merger_tree(p.fname, halo_id_start)
+                    if nodes_mt is None:
+                        print('| Building merger tree for halo {0}...'.format(halo_id_start))
+                        trees = build_merger_tree(p.output_dir, [halo_id_start],
+                                                  list[-1], list[0])
+                        nodes_mt, edges_mt = trees.get(halo_id_start, ([], []))
+                        if nodes_mt:
+                            _save_merger_tree(p.fname, halo_id_start, nodes_mt, edges_mt)
+                    if nodes_mt:
+                        fig_mt, (ax_t, ax_m) = pyplot.subplots(1, 2, figsize=(18, 8))
+                        plot_merger_tree(nodes_mt, edges_mt, ax_t, ax_m, params_dyn,
+                                         halo_label='tracked', halo_color=cp[0])
+                        pyplot.tight_layout()
+                        pdf.savefig(fig_mt, dpi=100)
+                    else:
+                        print('| [Warning] merger tree empty for halo {0}'.format(halo_id_start))
+                except Exception as _e:
+                    print('| [Warning] merger tree failed: {0}'.format(_e))
+                    _tb.print_exc()
+                finally:
+                    pyplot.close('all')
