@@ -921,228 +921,115 @@ def _add_redshift_top_axis(ax, params, z_ticks=(0, 0.5, 1, 2, 3, 5, 7, 10)):
 
 def plot_merger_tree(nodes, edges, ax_tree, ax_mass, params, halo_color,
                      halo_label='', z_scale=None, proj=('x', 'y')):
-    """Scatter DM particles of each tree node, y-shifted by redshift.
+    """Node/line merger tree diagram — no snapshot loading.
 
-    Particles belonging to each node are scattered in the proj[0]-proj[1]
-    plane (kpc). The proj[1] coordinate is shifted by z/(1+z) * z_scale so that
-    z=0 nodes are unshifted and higher-redshift snapshots appear progressively
-    offset upward. The z/(1+z) mapping gives more visual separation at low
-    redshift where snapshots are closely spaced in z.
-    Horizontal dotted lines label each snapshot's redshift.
-    Main branch is blue, merger branches are orange.
-
-    ax_mass is hidden (kept for pipeline compatibility).
-    z_scale : kpc per unit z/(1+z). Defaults to 0.1 * box_kpc of root snapshot.
-    proj    : spatial axes to project, chosen from 'x', 'y', 'z'.
+    Left panel (ax_tree): branches as vertical lines, nodes as circles scaled
+    by log(mass). Main branch centred at x=0; merger branches staggered left/right.
+    Right panel (ax_mass): main-branch mass vs lookback time; orange verticals at mergers.
     """
     if not nodes:
-        ax_tree.text(0.5, 0.5, 'No tree data',
-                     transform=ax_tree.transAxes, ha='center')
+        for _ax in (ax_tree, ax_mass):
+            _ax.text(0.5, 0.5, 'No tree data', transform=_ax.transAxes, ha='center')
         return
 
     col_main   = halo_color
     col_merger = '#e6550d'
-    axis_map   = {'x': 0, 'y': 1, 'z': 2}
-    xi = axis_map[proj[0]]
-    yi = axis_map[proj[1]]
 
-    # Load each unique snapshot once; positions in kpc
-    sim_cache = {}
-    for nd in nodes:
-        snap = nd['snap']
-        if snap in sim_cache:
-            continue
-        try:
-            sim     = _load_sim(snap)
-            box_kpc = float(sim.properties['boxsize'].in_units('kpc'))
-            sim_cache[snap] = (np.array(sim['pos']), sim['iord'], box_kpc)
-        except Exception as e:
-            print('[plot_merger_tree] could not load {0}: {1}'.format(snap, e))
-
-    print('[plot_merger_tree] {0} nodes, {1} snapshots loaded'.format(
-        len(nodes), len(sim_cache)))
-
-    # Default z_scale: 0.1 box width per unit redshift
-    if z_scale is None:
-        snap0 = nodes[0]['snap']
-        box_kpc = sim_cache[snap0][2] if snap0 in sim_cache else 100000.0
-        z_scale = box_kpc * 0.1
-
-    # Pre-compute main-branch centre per snapshot for consistent centering
-    # All branches at the same snapshot are centred on the main branch mean,
-    # so merger branches appear spatially offset rather than collapsed to zero.
-    main_centre = {}   # snap -> (x_mean_kpc, y_mean_kpc)
-    for nd in nodes:
-        if not nd['is_main']:
-            continue
-        snap = nd['snap']
-        if snap not in sim_cache:
-            continue
-        pos_kpc, iord_snap, box_kpc = sim_cache[snap]
-        if 'iord' in nd and len(nd['iord']) > 0:
-            mask = np.isin(iord_snap, nd['iord'])
-        else:
-            dists = np.linalg.norm(pos_kpc - np.array(nd['pos']), axis=1)
-            mask  = dists <= nd['rvir']
-        if np.any(mask):
-            main_centre[snap] = (float(np.mean(pos_kpc[mask, xi])),
-                                 float(np.mean(pos_kpc[mask, yi])))
-
-    # Scatter particles for each node; track centred x range and per-node mean x
-    seen_z      = {}   # z (rounded) -> y_shift, for redshift labels
-    x_all       = []   # all centred x values, to set xlim from actual spread
-    node_xmean  = {}   # nd_idx -> mean centred x of that node's particles
-    node_yshift = {}   # nd_idx -> y_shift of that node
-    for nd_idx, nd in enumerate(nodes):
-        snap = nd['snap']
-        if snap not in sim_cache:
-            continue
-        pos_kpc, iord_snap, box_kpc = sim_cache[snap]
-
-        # Use stored iord if available, else fall back to R200 sphere (both in kpc)
-        if 'iord' in nd and len(nd['iord']) > 0:
-            mask = np.isin(iord_snap, nd['iord'])
-        else:
-            dists = np.linalg.norm(pos_kpc - np.array(nd['pos']), axis=1)
-            mask  = dists <= nd['rvir']
-
-        if not np.any(mask):
-            print('[plot_merger_tree] node halo_id={0} z={1:.2f}: no particles found'.format(
-                nd['halo_id'], nd['z']))
-            continue
-
-        print('[plot_merger_tree] node halo_id={0} z={1:.2f}: {2} particles'.format(
-            nd['halo_id'], nd['z'], np.sum(mask)))
-
-        cx, cy  = main_centre.get(snap, (float(np.mean(pos_kpc[mask, xi])),
-                                         float(np.mean(pos_kpc[mask, yi]))))
-        x_cent  = pos_kpc[mask, xi] - cx
-        y_cent  = pos_kpc[mask, yi] - cy
-        y_shift = (nd['z'] / (1.0 + nd['z'])) * z_scale
-        col     = col_main if nd['is_main'] else col_merger
-        ax_tree.scatter(x_cent, y_cent + y_shift,
-                        s=0.5, color=col, alpha=0.4, rasterized=True)
-
-        x_all.append(x_cent)
-        node_xmean[nd_idx]  = float(np.mean(x_cent))
-        node_yshift[nd_idx] = y_shift
-        z_key = round(nd['z'], 3)
-        if z_key not in seen_z:
-            seen_z[z_key] = y_shift
-
-    # xlim from actual particle spread
-    if x_all:
-        x_concat   = np.concatenate(x_all)
-        half_width = np.max(np.abs(x_concat)) * 3.0
-        ax_tree.set_xlim(-half_width, half_width)
-    else:
-        half_width = 1.0
-
-    # Horizontal dotted lines; label only the snapshot nearest each integer redshift
-    int_z_targets = list(range(int(np.floor(max(seen_z.keys()))) + 1))  # [0,1,2,...]
-    labelled = set()
-    for z_int in int_z_targets:
-        if not seen_z:
-            break
-        closest = min(seen_z.keys(), key=lambda z: abs(z - z_int))
-        labelled.add(closest)
-    for z_val, y_sh in sorted(seen_z.items()):
-        ax_tree.axhline(y_sh, color='grey', lw=0.5, ls=':', alpha=0.6, zorder=0)
-        if z_val in labelled:
-            ax_tree.text(half_width, y_sh, ' z={0:.1f}'.format(z_val),
-                         va='center', ha='left', fontsize=12, color='grey')
-
-    # Mass ratio annotations at merger events
-    # Collect labels per y-level so multiple mergers at the same snapshot appear side by side
-    main_at = {}   # (desc_idx, snap) -> node_idx of the main progenitor
-    for (nidx, didx, etype) in edges:
-        if etype == 'main':
-            main_at[(didx, nodes[nidx]['snap'])] = nidx
-    merger_labels_by_y = {}   # y_shift -> [label, ...]
-    for (nidx, didx, etype) in edges:
-        if etype != 'merger':
-            continue
-        if nidx not in node_yshift:
-            continue
-        main_nidx = main_at.get((didx, nodes[nidx]['snap']))
-        if main_nidx is None:
-            continue
-        m_merger = nodes[nidx]['mass']
-        m_main   = nodes[main_nidx]['mass']
-        if m_main <= 0 or m_merger <= 0:
-            continue
-        ratio_n = max(m_main, m_merger) / min(m_main, m_merger)
-        label   = '{0:.0f}:1'.format(ratio_n)
-        merger_labels_by_y.setdefault(node_yshift[nidx], []).append(label)
-
-    for y_sh, labels in merger_labels_by_y.items():
-        ax_tree.text(-half_width * 0.97, y_sh, '   '.join(labels),
-                     va='center', ha='left', fontsize=11, color=col_merger)
-
-    if merger_labels_by_y:
-        ax_tree.text(0.02, 0.98, 'merger ratios',
-                     transform=ax_tree.transAxes,
-                     va='top', ha='left', fontsize=11, color=col_merger)
-
-    ax_tree.set_xlabel('')
-    ax_tree.set_ylabel('')
-    ax_tree.set_title('Merger tree — halo {0}'.format(halo_label))
-    ax_tree.tick_params(axis='x', which='both', bottom=False, labelbottom=False)
-    ax_tree.tick_params(axis='y', which='both', left=False, labelleft=False)
-    sns.despine(ax=ax_tree)
-
-    # --- Mass evolution plot ---
-    # Build desc->main-progenitor map to trace main branch chain backward
-    desc_to_main_prog = {}
+    # Build connectivity maps
+    desc_to_main = {}   # desc_idx -> main-progenitor node_idx
+    desc_to_all  = {}   # desc_idx -> [(prog_idx, etype)]
     for (prog_idx, desc_idx, etype) in edges:
+        desc_to_all.setdefault(desc_idx, []).append((prog_idx, etype))
         if etype == 'main':
-            desc_to_main_prog[desc_idx] = prog_idx
+            desc_to_main[desc_idx] = prog_idx
 
-    def _trace_backward(start):
+    def _trace_main(start):
         chain = [start]
         cur = start
-        while cur in desc_to_main_prog:
-            cur = desc_to_main_prog[cur]
+        while cur in desc_to_main:
+            cur = desc_to_main[cur]
             chain.append(cur)
-        return chain  # start = lowest z, end = highest z
+        return chain
 
-    main_chain = _trace_backward(0) if nodes else []
+    main_chain = _trace_main(0) if nodes else []
 
+    # Assign x-positions: main branch at x=0, mergers staggered alternately
+    node_x = {ni: 0.0 for ni in main_chain}
+    _offset = 1.0
+    for ni in main_chain:
+        mergers = [(p, e) for p, e in desc_to_all.get(ni, []) if e == 'merger']
+        for k, (prog_idx, _) in enumerate(mergers):
+            node_x[prog_idx] = _offset * (1 if k % 2 == 0 else -1)
+            _offset += 0.5
+
+    # Convert redshifts to lookback times
+    all_z = np.array([nd['z'] for nd in nodes])
+    all_t = _lookback_gyr(all_z, params)
+    node_t = {i: float(all_t[i]) for i in range(len(nodes))}
+
+    # Node sizes proportional to log(mass)
+    m_arr   = np.array([nd['mass'] for nd in nodes])
+    m_valid = m_arr[m_arr > 0]
+    if len(m_valid) > 0:
+        log_m_min = np.log10(m_valid.min())
+        log_m_rng = max(np.log10(m_valid.max()) - log_m_min, 1.0)
+    else:
+        log_m_min, log_m_rng = 10.0, 1.0
+
+    def _node_size(mass):
+        if mass <= 0:
+            return 20
+        return 20 + 200 * (np.log10(mass) - log_m_min) / log_m_rng
+
+    # Draw edges
+    for (prog_idx, desc_idx, etype) in edges:
+        if desc_idx not in node_x or prog_idx not in node_x:
+            continue
+        col = col_main if etype == 'main' else col_merger
+        x0, x1 = node_x[desc_idx], node_x[prog_idx]
+        t0, t1 = node_t[desc_idx], node_t[prog_idx]
+        # Elbow: vertical segment then horizontal to merger branch
+        ax_tree.plot([x0, x0], [t0, t1], color=col, lw=1.5, alpha=0.8, zorder=2)
+        if x0 != x1:
+            ax_tree.plot([x0, x1], [t1, t1], color=col, lw=1.5, alpha=0.8, zorder=2)
+
+    # Draw nodes
+    for ni, nd in enumerate(nodes):
+        if ni not in node_x:
+            continue
+        col = col_main if nd['is_main'] else col_merger
+        ax_tree.scatter(node_x[ni], node_t[ni],
+                        s=_node_size(nd['mass']), color=col,
+                        edgecolors='white', linewidths=0.4, zorder=5)
+
+    # Redshift labels on right y-axis
+    z_max_tree = float(max(all_z)) if len(all_z) > 0 else 6.0
+    z_ticks    = [z for z in range(0, int(np.floor(z_max_tree)) + 1)]
+    t_ticks    = _lookback_gyr(np.array(z_ticks), params)
+    ax_tree.set_yticks(t_ticks)
+    ax_tree.set_yticklabels([str(z) for z in z_ticks])
+    ax_tree.set_ylabel('Redshift')
+    ax_tree.set_xlabel('')
+    ax_tree.set_xticks([])
+    ax_tree.set_title('Merger tree — {0}'.format(halo_label))
+    sns.despine(ax=ax_tree, bottom=True)
+
+    # --- Right panel: mass evolution ---
     if main_chain:
-        z_main = np.array([nodes[i]['z'] for i in main_chain])
-        t_main = _lookback_gyr(z_main, params)
-        m_main = np.array([nodes[i]['mass'] for i in main_chain])
+        z_main  = np.array([nodes[i]['z'] for i in main_chain])
+        t_main  = _lookback_gyr(z_main, params)
+        m_main  = np.array([nodes[i]['mass'] for i in main_chain])
+        srt     = np.argsort(t_main)
+        ax_mass.plot(t_main[srt], m_main[srt], color=col_main, lw=2)
 
-        # Drop outliers: keep only points where mass is within 10x of local median
-        if len(m_main) >= 3:
-            med  = np.median(m_main)
-            keep = (m_main > med / 10.0) & (m_main < med * 10.0)
-        else:
-            keep = np.ones(len(m_main), dtype=bool)
-        ax_mass.plot(t_main[keep], m_main[keep], color=col_main, lw=2)
-
-    # Vertical orange line at the lookback time of each merger event
-    merger_times = []
     for (prog_idx, desc_idx, etype) in edges:
         if etype == 'merger':
-            merger_times.append(_lookback_gyr(nodes[prog_idx]['z'], params))
-    for t_mrg in merger_times:
-        ax_mass.axvline(t_mrg, color=col_merger, lw=1, alpha=0.7)
+            ax_mass.axvline(node_t[prog_idx], color=col_merger, lw=1, alpha=0.6)
 
     ax_mass.set_yscale('log')
-    # today (z=0, t=0) on the LEFT; lookback time increases to the right
     ax_mass.set_xlabel('Lookback time [Gyr]')
-    ax_mass.set_ylabel('Mass [M$_\\odot$]')
-
-    # Top x-axis: redshift ticks at integer z values, aligned to lookback times
-    z_max_plot = max((nodes[i]['z'] for i in main_chain), default=0.0)
-    ax_z = ax_mass.twiny()
-    ax_z.set_xlim(ax_mass.get_xlim())
-    z_int_ticks = list(range(0, int(np.floor(z_max_plot)) + 1))
-    t_int_ticks = _lookback_gyr(z_int_ticks, params)
-    ax_z.set_xticks(t_int_ticks)
-    ax_z.set_xticklabels([str(z) for z in z_int_ticks])
-    ax_z.set_xlabel('Redshift')
+    ax_mass.set_ylabel(r'Mass [M$_\odot$]')
+    ax_mass.set_title('Mass growth')
     sns.despine(ax=ax_mass)
 
 
@@ -2395,7 +2282,7 @@ def decontaminate(config_file):
                             minlength=len(_host_idx))
                         # Scale threshold to sample fraction
                         _frac     = _n_found / max(len(_tracked_iord), 1)
-                        _thresh_s = max(1, int(_mt_npart_thresh * _frac))
+                        _thresh_s = max(_mt_npart_thresh, int(0.05 * _n_found))
                         _valid_vi = np.where(_counts >= _thresh_s)[0]
                         print('[merger_tree]   host_halos={0}  above_thresh={1}'.format(
                             len(_host_idx), len(_valid_vi)))
@@ -2679,10 +2566,10 @@ def decontaminate(config_file):
                     if nodes_mt:
                         _save_merger_tree(p.fname, halo_id_start, nodes_mt, edges_mt)
                     if nodes_mt:
-                        fig_mt, (ax_t, ax_m) = pyplot.subplots(1, 2, figsize=(18, 8))
+                        fig_mt, (ax_t, ax_m) = pyplot.subplots(
+                            1, 2, figsize=(18, 8), constrained_layout=True)
                         plot_merger_tree(nodes_mt, edges_mt, ax_t, ax_m, params_dyn,
                                          halo_label='tracked', halo_color=cp[0])
-                        pyplot.tight_layout()
                         pdf.savefig(fig_mt, dpi=100)
                     else:
                         print('| [Warning] merger tree empty for halo {0}'.format(halo_id_start))
