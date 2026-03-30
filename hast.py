@@ -2639,7 +2639,7 @@ def decontaminate(config_file):
             sns.set_style("ticks", {"axes.grid": False, "xtick.direction": 'in', "ytick.direction": 'in'})
             fig, ax_rc = pyplot.subplots(1, 1, figsize=(10, 8))
             if rc_data:
-                _cmap_rc = pyplot.cm.plasma
+                _cmap_rc = pyplot.cm.tab20b
                 _norm_rc = pyplot.Normalize(vmin=0, vmax=6)
                 for _snap_z, _r_kpc, _v_kms in rc_data:
                     ax_rc.plot(_r_kpc, _v_kms, color=_cmap_rc(_norm_rc(_snap_z)),
