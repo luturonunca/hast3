@@ -1860,6 +1860,10 @@ class config_decontamination_obj():
             self.merger_tree = config.getboolean('decontamination','merger_tree')
         except:
             self.merger_tree = True
+        try:
+            self.use_cache = config.getboolean('decontamination','use_cache')
+        except:
+            self.use_cache = True
 
 
 def __halo_list_tracking(output,conf):
@@ -1934,20 +1938,6 @@ def decontaminate(config_file):
     n = np.zeros(max_out)
     idf = np.zeros(max_out)
 
-    region_all_zoom = np.array([]).astype(int)
-    ncoarse_in_rtb_all = 0
-    _rc_data          = []    # rotation curves: (redshift, r_kpc, v_circ)
-    _ql_data          = []    # q/lambda: (aexp, q, lam)
-    _lagrange_iords   = {}    # {z_int: iord_array} — R200 particles at closest snap to each z
-    _lagrange_best_dz = {_zt: float('inf') for _zt in range(0, 7)}
-    _central_iords    = None  # iords within rexclude at z_last
-    _G_kpc            = 4.302e-6   # kpc Msol^-1 (km/s)^2
-    _mt_nodes         = []    # merger tree nodes collected during tracking loop
-    _mt_edges         = []    # merger tree edges collected during tracking loop
-    _mt_watch         = []    # [(parent_node_idx, tracked_iord_array)]
-    _mt_cosmo         = None  # cosmological params (H0/omega_m/omega_l), read once at j==nfiles
-    _mt_npart_thresh  = 20    # min tracked particles for a halo to appear in the tree
-
     print('| Search radius     = {0:.2f}*R200'.format(p.rvir_search))
     print('| Traceback radius  = {0:.2f}*R200'.format(p.rvir))
     print('| Halo cut off mass = {0:.2e} Msol'.format(p.halo_cutoff))
@@ -1962,9 +1952,68 @@ def decontaminate(config_file):
         print('[Error] {0} file specified cannot be read'.format(p.output_zinit))
         sys.exit()
 
+    # --- Tracking cache: skip the loop entirely on re-runs ---
+    import pickle as _pickle
+    _cache_file   = p.fname + '_tracking_cache.pkl'
+    _cache_loaded = False
+    if p.use_cache and os.path.exists(_cache_file):
+        try:
+            with open(_cache_file, 'rb') as _cf:
+                _cache = _pickle.load(_cf)
+            x               = _cache['x'];      y    = _cache['y'];   z    = _cache['z']
+            m               = _cache['m'];      mnt  = _cache['mnt']; mnm  = _cache['mnm']
+            n               = _cache['n'];      idf  = _cache['idf']; aexp = _cache['aexp']
+            r200_start      = _cache['r200_start']
+            halo_id_start   = _cache['halo_id_start']
+            zinit_center    = _cache['zinit_center']
+            region_all_zoom = _cache['region_all_zoom']
+            _rc_data        = _cache['_rc_data']
+            _ql_data        = _cache['_ql_data']
+            _lagrange_iords      = _cache['_lagrange_iords']
+            _central_iords       = _cache['_central_iords']
+            _lagrange_rvir_fracs = _cache.get('_lagrange_rvir_fracs', {})
+            _mt_nodes            = _cache['_mt_nodes']
+            _mt_edges            = _cache['_mt_edges']
+            # Recompute sim_zinit-derived variables (fast, no snapshot load needed)
+            _ind_c              = sim_zinit['iord'][region_all_zoom]
+            region_zinit        = np.searchsorted(sim_zinit['iord'], _ind_c, side='left')
+            coarse_in_rtb_init  = np.where(sim_zinit['mass'][region_zinit] > 1.1*np.min(sim_zinit['mass']))
+            zoom_init           = np.where(sim_zinit['mass'] < 1.1*np.min(sim_zinit['mass']))
+            _pzc                = np.array(sim_zinit['pos']) - np.array(zinit_center)
+            _rzc                = np.linalg.norm(_pzc, axis=1)
+            allowed             = np.where((_rzc[region_zinit] < p.rexclude) |
+                                           (sim_zinit['mass'][region_zinit] < 1.1*np.min(sim_zinit['mass'])))
+            not_allowed         = np.where((_rzc[region_zinit] >= p.rexclude) &
+                                           (sim_zinit['mass'][region_zinit] > 1.1*np.min(sim_zinit['mass'])))
+            _cache_loaded = True
+            print('| Tracking cache loaded — skipping loop')
+            print('| Cache file: {0}'.format(_cache_file))
+        except Exception as _ce:
+            print('| [Warning] Cache load failed ({0}) — running full loop'.format(_ce))
+            _cache_loaded = False
+
+    # Default init (overridden by cache above if loaded)
+    if not _cache_loaded:
+        region_all_zoom = np.array([]).astype(int)
+        ncoarse_in_rtb_all = 0
+        _rc_data          = []    # rotation curves: (redshift, r_kpc, v_circ)
+        _ql_data          = []    # q/lambda: (aexp, q, lam)
+        _lagrange_iords      = {}    # {z_int: iord_array} — R200 particles at closest snap to each z
+        _lagrange_best_dz    = {_zt: float('inf') for _zt in range(0, 7)}
+        _central_iords       = None  # iords within rexclude at z_last
+        _lagrange_rvir_fracs = {}    # {frac: iord_array} — particles within frac*R200 at z_last
+        _G_kpc            = 4.302e-6   # kpc Msol^-1 (km/s)^2
+        _mt_nodes         = []    # merger tree nodes collected during tracking loop
+        _mt_edges         = []    # merger tree edges collected during tracking loop
+        _mt_watch         = []    # [(parent_node_idx, tracked_iord_array)]
+        _mt_cosmo         = None  # cosmological params (H0/omega_m/omega_l), read once at j==nfiles
+        _mt_npart_thresh  = 20    # min tracked particles for a halo to appear in the tree
+
     # Get positions of most massive halo from PHEW halo catalogues
     k = nfiles
     for j in range(nfiles, -1, -1):
+        if _cache_loaded:
+            break
         print('| '+p.output_dir+'/output_{j:05d}/clump_{j:05d}.txt?????'.format(j=j))
         print('| ------------------------------------------------------------')
         if not os.path.exists(p.output_dir+'/output_{j:05d}/clump_{j:05d}.txt00001'.format(j=j)):
@@ -2216,6 +2265,9 @@ def decontaminate(config_file):
                 # Merger tree — seeded at j==nfiles, tracked at all subsequent steps
                 if j == nfiles:
                     _central_iords = _iord_pb[_r_pb <= p.rexclude].copy()
+                    _RVIR_FRACS = [0.1, 0.3, 0.5, 0.7, 0.9, 1.0, 1.5, 2.0]
+                    for _rf in _RVIR_FRACS:
+                        _lagrange_rvir_fracs[_rf] = _iord_pb[_r_pb <= _rf * r200_curr].copy()
                     if p.merger_tree:
                         _mt_cosmo        = _read_info_params(list[j-1])
                         _mt_npart_thresh = _read_npart_threshold(list[j-1])
@@ -2336,32 +2388,52 @@ def decontaminate(config_file):
                 break
 
     print('| ------------------------------------------------------------')
-    if(len(coarse_in_rtb_init)>0):
-        try:
-            np.savetxt((p.fname).strip()+'_part',np.array(sim_zinit['pos'])[region_zinit][allowed][hull.vertices]-shift)
-            print('| Particle list outputed to '+(p.fname).strip())
-        except:
-            print('[Error] Cannot write file '+(p.fname).strip())
-            sys.exit()
+    if not _cache_loaded:
+        if(len(coarse_in_rtb_init)>0):
+            try:
+                np.savetxt((p.fname).strip()+'_part',np.array(sim_zinit['pos'])[region_zinit][allowed][hull.vertices]-shift)
+                print('| Particle list outputed to '+(p.fname).strip())
+            except:
+                print('[Error] Cannot write file '+(p.fname).strip())
+                sys.exit()
 
-        sys.stdout.flush()
-    else:
-        print('| No contamination')
+            sys.stdout.flush()
+        else:
+            print('| No contamination')
 
-    # Remove NaNs
-    defined = np.where(aexp>0.0)
-    x = x[defined]
-    y = y[defined]
-    z = z[defined]
-    m = m[defined]
-    n = n[defined]
-    mnm = mnm[defined]
-    mnt = mnt[defined]
-    aexp = aexp[defined]
-    idf = idf[defined]
+        # Remove NaNs
+        defined = np.where(aexp>0.0)
+        x = x[defined]
+        y = y[defined]
+        z = z[defined]
+        m = m[defined]
+        n = n[defined]
+        mnm = mnm[defined]
+        mnt = mnt[defined]
+        aexp = aexp[defined]
+        idf = idf[defined]
 
-    # Write results (x,y,z in code units 0..1 matching pynbody version)
-    np.savetxt(p.fname+'_track',np.transpose(np.squeeze([aexp,x,y,z,m,n,idf,mnt,mnm])),header="aexp x y z mass npart ids_fraction mass_neighb_max mass_neighb_tot")
+        # Write results (x,y,z in code units 0..1 matching pynbody version)
+        np.savetxt(p.fname+'_track',np.transpose(np.squeeze([aexp,x,y,z,m,n,idf,mnt,mnm])),header="aexp x y z mass npart ids_fraction mass_neighb_max mass_neighb_tot")
+
+        # Save tracking cache
+        if p.use_cache:
+            _cache_data = {
+                'x': x, 'y': y, 'z': z, 'm': m, 'mnt': mnt, 'mnm': mnm,
+                'n': n, 'idf': idf, 'aexp': aexp,
+                'r200_start': r200_start, 'halo_id_start': halo_id_start,
+                'zinit_center': zinit_center, 'region_all_zoom': region_all_zoom,
+                '_rc_data': _rc_data, '_ql_data': _ql_data,
+                '_lagrange_iords': _lagrange_iords, '_central_iords': _central_iords,
+                '_lagrange_rvir_fracs': _lagrange_rvir_fracs,
+                '_mt_nodes': _mt_nodes, '_mt_edges': _mt_edges,
+            }
+            try:
+                with open(_cache_file, 'wb') as _cf:
+                    _pickle.dump(_cache_data, _cf, protocol=4)
+                print('| Tracking cache saved to {0}'.format(_cache_file))
+            except Exception as _ce:
+                print('| [Warning] Cache save failed: {0}'.format(_ce))
 
     # Fit coefficients
     cx = polyfit(aexp, x, 3, full=True, w=m)[0]
@@ -2626,7 +2698,8 @@ def decontaminate(config_file):
                     _zints_avail = sorted(_lagrange_iords.keys())
                     _cmap_lag    = pyplot.cm.plasma
                     _norm_lag    = pyplot.Normalize(vmin=0, vmax=6)
-                    fig6, axes6  = pyplot.subplots(1, 2, figsize=(16, 7))
+                    fig6, axes6  = pyplot.subplots(1, 2, figsize=(14, 6),
+                                                   constrained_layout=True)
                     sns.set_style("ticks", {"axes.grid": False,
                                             "xtick.direction": 'in',
                                             "ytick.direction": 'in'})
@@ -2640,13 +2713,13 @@ def decontaminate(config_file):
                     axes6[0].set_ylabel('y [kpc]')
                     axes6[1].set_xlabel('x [kpc]')
                     axes6[1].set_ylabel('z [kpc]')
-                    for _ax6 in axes6:
-                        _ax6.set_aspect('equal')
+                    axes6[0].set_aspect('equal')
+                    axes6[1].set_aspect('equal')
                     _sm6 = pyplot.cm.ScalarMappable(cmap=_cmap_lag, norm=_norm_lag)
                     _sm6.set_array([])
-                    fig6.colorbar(_sm6, ax=axes6.tolist(), label='redshift', shrink=0.6)
-                    axes6[0].set_title('Lagrangian regions at z_init — R200 particles colored by redshift')
-                    pyplot.tight_layout()
+                    fig6.colorbar(_sm6, ax=axes6[1], location='right',
+                                  label='redshift', shrink=0.8)
+                    axes6[0].set_title('Lagrangian regions at z_init — R200 particles by redshift')
                     pdf.savefig(fig6, dpi=100)
                 else:
                     print('| [Warning] No Lagrangian iords collected — skipping page 6')
@@ -2656,33 +2729,42 @@ def decontaminate(config_file):
             finally:
                 pyplot.close('all')
 
-            # Page 7: full halo (R200 contour) vs central region (filled shadow) at z_init
+            # Page 7: LG origin at z_init for particles within 0.1..2.0 x R200 at z_last
             try:
-                if _central_iords is not None and 0 in _lagrange_iords:
-                    _pts_full    = _zinit_pos_for_iords(_lagrange_iords[0])
-                    _pts_central = _zinit_pos_for_iords(_central_iords)
-                    fig7, axes7  = pyplot.subplots(1, 2, figsize=(16, 7))
+                if _lagrange_rvir_fracs:
+                    _RVIR_FRACS_PLOT = [0.1, 0.3, 0.5, 0.7, 0.9, 1.0, 1.5, 2.0]
+                    _fracs_avail = [_rf for _rf in _RVIR_FRACS_PLOT if _rf in _lagrange_rvir_fracs]
+                    _cmap_frac   = pyplot.cm.plasma
+                    _norm_frac   = pyplot.Normalize(vmin=0.0, vmax=2.0)
+                    fig7, axes7  = pyplot.subplots(1, 2, figsize=(14, 6),
+                                                   constrained_layout=True)
                     sns.set_style("ticks", {"axes.grid": False,
                                             "xtick.direction": 'in',
                                             "ytick.direction": 'in'})
-                    for _ax7, _xi, _yi, _xl, _yl in [
-                            (axes7[0], 0, 1, 'x [kpc]', 'y [kpc]'),
-                            (axes7[1], 0, 2, 'x [kpc]', 'z [kpc]')]:
-                        _hull_contour_2d(_ax7, _pts_full,    _xi, _yi,
-                                         color=cp[0], lw=2.0, label='R200 at z=0')
-                        _hull_patch_2d(  _ax7, _pts_central, _xi, _yi,
-                                         facecolor=cp[1], alpha=0.4, label='rexclude at z=0')
-                        _ax7.set_xlabel(_xl)
-                        _ax7.set_ylabel(_yl)
-                        _ax7.set_aspect('equal')
-                    axes7[0].legend(loc='best', frameon=False, fontsize=9)
-                    axes7[0].set_title('Lagrangian origin at z_init: full halo vs central region')
-                    pyplot.tight_layout()
+                    for _rf in _fracs_avail:
+                        _pts_rf = _zinit_pos_for_iords(_lagrange_rvir_fracs[_rf])
+                        _col_rf = _cmap_frac(_norm_frac(_rf))
+                        _lbl_rf = '{0}R200'.format(_rf)
+                        _hull_contour_2d(axes7[0], _pts_rf, 0, 1,
+                                         color=_col_rf, lw=1.5, label=_lbl_rf)
+                        _hull_contour_2d(axes7[1], _pts_rf, 0, 2,
+                                         color=_col_rf, lw=1.5)
+                    axes7[0].set_xlabel('x [kpc]')
+                    axes7[0].set_ylabel('y [kpc]')
+                    axes7[1].set_xlabel('x [kpc]')
+                    axes7[1].set_ylabel('z [kpc]')
+                    axes7[0].set_aspect('equal')
+                    axes7[1].set_aspect('equal')
+                    _sm7 = pyplot.cm.ScalarMappable(cmap=_cmap_frac, norm=_norm_frac)
+                    _sm7.set_array([])
+                    fig7.colorbar(_sm7, ax=axes7[1], location='right',
+                                  label='fraction of R200 at z=0', shrink=0.8)
+                    axes7[0].set_title('Lagrangian origin at z_init — particles within f x R200 at z=0')
                     pdf.savefig(fig7, dpi=100)
                 else:
-                    print('| [Warning] Lagrangian shadow data missing — skipping page 7')
+                    print('| [Warning] No rvir-fraction iords collected — skipping page 7')
             except Exception as _e7:
-                print('| [Warning] Page 7 (Lagrangian shadow) failed: {0}'.format(_e7))
+                print('| [Warning] Page 7 (Lagrangian by rvir frac) failed: {0}'.format(_e7))
                 _tb.print_exc()
             finally:
                 pyplot.close('all')
