@@ -2010,14 +2010,16 @@ def decontaminate(config_file):
         _mt_npart_thresh  = 20    # min tracked particles for a halo to appear in the tree
 
     # Get positions of most massive halo from PHEW halo catalogues
+    _snap_w = len(str(nfiles))   # digits for zero-padded snap number
     k = nfiles
     for j in range(nfiles, -1, -1):
         if _cache_loaded:
             break
-        print('| '+p.output_dir+'/output_{j:05d}/clump_{j:05d}.txt?????'.format(j=j))
-        print('| ------------------------------------------------------------')
+        _pfx = '| snap {0:0{1}d} |'.format(j, _snap_w)
+        print(_pfx+' '+p.output_dir+'/output_{j:05d}/clump_{j:05d}.txt?????'.format(j=j))
+        print(_pfx+' ------------------------------------------------------------')
         if not os.path.exists(p.output_dir+'/output_{j:05d}/clump_{j:05d}.txt00001'.format(j=j)):
-            print('| clump_{j:05d}.txt????? not found'.format(j=j))
+            print(_pfx+' clump_{j:05d}.txt????? not found'.format(j=j))
             continue
         else:
             try:
@@ -2025,10 +2027,10 @@ def decontaminate(config_file):
                 # Find halo with the largest number of cells (i.e. zoomed halo)
                 hl = hl[np.flipud(hl[:,3].argsort())]
             except:
-                print('| No haloes found in PHEW outputs')
+                print(_pfx+' No haloes found in PHEW outputs')
                 break
             if(len(hl)==0):
-                print('| No haloes found in PHEW outputs')
+                print(_pfx+' No haloes found in PHEW outputs')
                 continue
 
             if(j==nfiles):
@@ -2038,7 +2040,7 @@ def decontaminate(config_file):
                     id = np.argmin(dist_halo)
                 else:
                     id = p.halo_num-1
-                    print('| Selecting halo ranked ',p.halo_num,' with ',int(hl[id,3]),' cells')
+                    print(_pfx+' Selecting halo ranked {0} with {1} cells'.format(p.halo_num, int(hl[id,3])))
             # Build tree for halos (positions in kpc)
             tree_halo = KDTree(np.squeeze((hl[:,4:7])),leaf_size=p.tree_nleaves)
             diff = k-j+1
@@ -2060,16 +2062,16 @@ def decontaminate(config_file):
                 # Filter low mass halos
                 halo_candidates = halo_candidates[hl[halo_candidates,10]>mass_cutoff]
                 if(len(halo_candidates)==0):
-                    print('| No halos found')
-                    print('| Tracking stopped at aexp={0}'.format(aexp_curr))
+                    print(_pfx+' No halos found')
+                    print(_pfx+' Tracking stopped at aexp={0}'.format(aexp_curr))
                     break
                 # Gather particles in the previous selected halo (r200_start in kpc)
                 halo_part_prev = tree_part_prev.query_radius(np.array([[x[k]*_box_kpc_prev,y[k]*_box_kpc_prev,z[k]*_box_kpc_prev]]),p.rvir_track*r200_start)[0]
                 # Build tree for particles
-                print('|    | npart tree               = {0:9d} ------------------'.format(len(sim_curr)))
+                print(_pfx+'    | npart tree               = {0:9d} ------------------'.format(len(sim_curr)))
                 tree_part_curr = KDTree(np.squeeze((sim_curr['pos'])),leaf_size=p.tree_nleaves)
-                print('|    | Previous halo population = {0:7d} --------------------'.format(len(halo_candidates)))
-                print('|    | Cutoff mass              = {0:4.2e} -------------------'.format(mass_cutoff*to_msol))
+                print(_pfx+'    | Previous halo population = {0:7d} --------------------'.format(len(halo_candidates)))
+                print(_pfx+'    | Cutoff mass              = {0:4.2e} -------------------'.format(mass_cutoff*to_msol))
 
                 ids_frac = np.zeros(len(halo_candidates))
                 ii = 0
@@ -2083,7 +2085,7 @@ def decontaminate(config_file):
                     # Matching indices fraction
                     ids_frac[ii] = float(len(matching_ids))/float(len(halo_part_prev))
                     ii += 1
-                    print('|    |         halo {0:7d} | idf={1:5.2f}% | m={2:5.2e} Msol'.format(halo,100*ids_frac[ii-1],hl[halo,10]*to_msol))
+                    print(_pfx+'    |         halo {0:7d} | idf={1:5.2f}% | m={2:5.2e} Msol'.format(halo,100*ids_frac[ii-1],hl[halo,10]*to_msol))
                 # Selecting best candidate
                 best_candidate = np.argmax(ids_frac)
                 id = halo_candidates[best_candidate]
@@ -2094,17 +2096,17 @@ def decontaminate(config_file):
                 try:
                     r200_curr = _virial_radius(_pos_curr,_mass_curr,_box_kpc_curr,hl[id,4:7],p.rvir_search*r200_curr)
                 except:
-                    print('| [Warning] Virial radius computation did not converge')
+                    print(_pfx+' [Warning] Virial radius computation did not converge')
                     r200_curr = (hl[id,10]*3./(200.*4.*math.pi))**(1.0/3.0) * _box_kpc_curr
                 mass_curr = hl[id,10]
-                print('|    |    -->  halo {0:7d} selected'.format(id))
-                print('| ------------------------------------------------------------')
+                print(_pfx+'    |    -->  halo {0:7d} selected'.format(id))
+                print(_pfx+' ------------------------------------------------------------')
 
             # Final snapshot - starting point
             else:
-                print('| Closest halo coordinates  = [{0:.5f},{1:.5f},{2:.5f}] kpc'.format(hl[id,4],hl[id,5],hl[id,6]))
+                print(_pfx+' Closest halo coordinates  = [{0:.5f},{1:.5f},{2:.5f}] kpc'.format(hl[id,4],hl[id,5],hl[id,6]))
                 if((p.halo_coords[0]>0.) & (p.halo_coords[1]>0.) & (p.halo_coords[2]>0.)):
-                    print('| Relative distance         = {0:.2e} kpc'.format(np.min(dist_halo)))
+                    print(_pfx+' Relative distance         = {0:.2e} kpc'.format(np.min(dist_halo)))
                 # Loading first snapshot
                 sim_curr = _load_sim(list[j-1])
                 aexp_curr = float(sim_curr.properties['a'])
@@ -2118,12 +2120,12 @@ def decontaminate(config_file):
                 id_start = id
                 halo_id_start = int(hl[id, 0])   # actual clump ID for merger tree
                 to_msol = float(np.sum(sim_curr['mass'].in_units('Msol')))
-                print('| R200                      = {0:.4f} kpc'.format(r200_start))
-                print('| M200                      = {0:.2e} Msol'.format(hl[id,10]*to_msol))
-                print('| coords                    = {0} kpc'.format(hl[id,4:7]))
+                print(_pfx+' R200                      = {0:.4f} kpc'.format(r200_start))
+                print(_pfx+' M200                      = {0:.2e} Msol'.format(hl[id,10]*to_msol))
+                print(_pfx+' coords                    = {0} kpc'.format(hl[id,4:7]))
                 sim_curr = sim_curr[np.argsort(sim_curr['iord'])]
                 tree_part_curr = KDTree(np.squeeze((sim_curr['pos'])),leaf_size=p.tree_nleaves)
-                print('| ------------------------------------------------------------')
+                print(_pfx+' ------------------------------------------------------------')
                 ids_frac = 1.0
                 # Find halos matching coordinate filter around previous halo
                 halo_candidates = tree_halo.query_radius(hl[id,4:7].reshape(1,-1),p.rvir_search*r200_curr)[0]
@@ -2156,18 +2158,18 @@ def decontaminate(config_file):
             ncoarse_in_rtb_all += len(coarse_in_rtb[0])
             coarse_in_r200 = np.where(sim_curr['mass'][virial_curr]>1.1*np.min(sim_curr['mass']))
             # r200_curr is already in kpc; comoving = physical/aexp
-            print('| R200                      = {0:.1f} kpc physical / {1:.1f} kpc comoving'.format(r200_curr,r200_curr/aexp_curr))
-            print('| M200                      = {0:.2e} Msol'.format(m200))
-            print('| M_clump                   = {0:.2e} Msol'.format(mass_candidate*to_msol))
-            print('| position                  = [{0:.4f},{1:.4f},{2:.4f}] kpc'.format(hl[id,4],hl[id,5],hl[id,6]))
-            print('| ------------------------------------------------------------')
-            print('| npart_tot(r<R200)         = {1}'.format(p.rvir,len(virial_curr)))
-            print('| npart_tot(r<{0}*R200)     = {1}'.format(p.rvir,len(region_curr)))
-            print('| npart_coarse(r<{0}*R200)  = {1}'.format(p.rvir,len(coarse_in_rtb[0])))
-            print('| npart_coarse_all          = {0}'.format(ncoarse_in_rtb_all))
-            print('| contamination(r<{0}*R200) = {1:.1f}%'.format(p.rvir,100*float(np.sum(sim_curr['mass'][region_curr][coarse_in_rtb]))/float(np.sum(sim_curr['mass'][region_curr]))))
-            print('| npart_zoom                = {0}'.format(len(zoom_part[0])))
-            print('| npart_tot                 = {0}'.format(len(sim_curr)))
+            print(_pfx+' R200                      = {0:.1f} kpc physical / {1:.1f} kpc comoving'.format(r200_curr,r200_curr/aexp_curr))
+            print(_pfx+' M200                      = {0:.2e} Msol'.format(m200))
+            print(_pfx+' M_clump                   = {0:.2e} Msol'.format(mass_candidate*to_msol))
+            print(_pfx+' position                  = [{0:.4f},{1:.4f},{2:.4f}] kpc'.format(hl[id,4],hl[id,5],hl[id,6]))
+            print(_pfx+' ------------------------------------------------------------')
+            print(_pfx+' npart_tot(r<R200)         = {1}'.format(p.rvir,len(virial_curr)))
+            print(_pfx+' npart_tot(r<{0}*R200)     = {1}'.format(p.rvir,len(region_curr)))
+            print(_pfx+' npart_coarse(r<{0}*R200)  = {1}'.format(p.rvir,len(coarse_in_rtb[0])))
+            print(_pfx+' npart_coarse_all          = {0}'.format(ncoarse_in_rtb_all))
+            print(_pfx+' contamination(r<{0}*R200) = {1:.1f}%'.format(p.rvir,100*float(np.sum(sim_curr['mass'][region_curr][coarse_in_rtb]))/float(np.sum(sim_curr['mass'][region_curr]))))
+            print(_pfx+' npart_zoom                = {0}'.format(len(zoom_part[0])))
+            print(_pfx+' npart_tot                 = {0}'.format(len(sim_curr)))
             # Get unique indices
             ind_curr = sim_zinit['iord'][region_all_zoom]
             # Trace indices back in the initial output
@@ -2188,24 +2190,24 @@ def decontaminate(config_file):
             r_zinit = np.linalg.norm(pos_zinit_cen, axis=1)
             allowed = np.where((r_zinit[region_zinit]<p.rexclude)|(sim_zinit['mass'][region_zinit]<1.1*np.min(sim_zinit['mass'])))
             not_allowed = np.where((r_zinit[region_zinit]>=p.rexclude)&(sim_zinit['mass'][region_zinit]>1.1*np.min(sim_zinit['mass'])))
-            print('| Included coarse part      = {0}'.format(len(allowed[0])))
-            print('| Excluded coarse part      = {0}'.format(len(not_allowed[0])))
+            print(_pfx+' Included coarse part      = {0}'.format(len(allowed[0])))
+            print(_pfx+' Excluded coarse part      = {0}'.format(len(not_allowed[0])))
             if(len(coarse_in_rtb_init)>0):
                 try:
                     # Compute centered positions and radii at curr snapshot
                     # (replaces pynbody in-place sim['pos'] centering + sim['r'])
                     pos_curr_cen = np.array(sim_curr['pos']) - hl[id,4:7]
                     r_curr = np.linalg.norm(pos_curr_cen, axis=1)
-                    print('| r_min coarse part/R200    = {0:.3e}'.format(float(np.min(r_curr[region_curr][coarse_in_rtb]))/r200_curr))
-                    print('| r_mean coarse part/R200   = {0:.3e}'.format(float(np.mean(r_curr[region_curr][coarse_in_rtb]))/r200_curr))
+                    print(_pfx+' r_min coarse part/R200    = {0:.3e}'.format(float(np.min(r_curr[region_curr][coarse_in_rtb]))/r200_curr))
+                    print(_pfx+' r_mean coarse part/R200   = {0:.3e}'.format(float(np.mean(r_curr[region_curr][coarse_in_rtb]))/r200_curr))
                 except:
                     pass
                 # Computing convex hulls volumes
                 hull = ConvexHull(np.array(sim_zinit['pos'])[region_zinit][allowed])
                 hull_zoom = ConvexHull(np.array(sim_zinit['pos'])[zoom_init])
-                print('| Convex Hull coarse part -> vol={0:.3e} dens={1:.3e}'.format(hull.volume,float(np.sum(sim_zinit['mass'][region_zinit][allowed])/hull.volume)))
-                print('| Convex Hull zoom part   -> vol={0:.3e} dens={1:.3e}'.format(hull_zoom.volume,float(np.sum(sim_zinit['mass'][zoom_init])/hull_zoom.volume)))
-                print('| Volume increase         -> {0:.2f}%'.format(100*(hull.volume/hull_zoom.volume)-100.))
+                print(_pfx+' Convex Hull coarse part -> vol={0:.3e} dens={1:.3e}'.format(hull.volume,float(np.sum(sim_zinit['mass'][region_zinit][allowed])/hull.volume)))
+                print(_pfx+' Convex Hull zoom part   -> vol={0:.3e} dens={1:.3e}'.format(hull_zoom.volume,float(np.sum(sim_zinit['mass'][zoom_init])/hull_zoom.volume)))
+                print(_pfx+' Volume increase         -> {0:.2f}%'.format(100*(hull.volume/hull_zoom.volume)-100.))
 
             if((np.max(ids_frac)>0.01)&(aexp_curr>p.aexp_min)):
                 # Store position in code units (0..1) for RAMSES polynomial fit
@@ -2383,8 +2385,8 @@ def decontaminate(config_file):
                                 'main' if _is_main else 'merger', int(_hrow_mt[0]), _counts[_vi]))
                     _mt_watch = _new_watch
             else:
-                print('| ------------------------------------------------------------')
-                print('| Tracking stopped at aexp={0}'.format(aexp_curr))
+                print(_pfx+' ------------------------------------------------------------')
+                print(_pfx+' Tracking stopped at aexp={0}'.format(aexp_curr))
                 break
 
     print('| ------------------------------------------------------------')
