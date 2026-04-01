@@ -1985,6 +1985,7 @@ def decontaminate(config_file):
                                            (sim_zinit['mass'][region_zinit] < 1.1*np.min(sim_zinit['mass'])))
             not_allowed         = np.where((_rzc[region_zinit] >= p.rexclude) &
                                            (sim_zinit['mass'][region_zinit] > 1.1*np.min(sim_zinit['mass'])))
+            ncoarse_in_rtb_all  = _cache.get('ncoarse_in_rtb_all', len(coarse_in_rtb_init[0]))
             _cache_loaded = True
             print('| Tracking cache loaded — skipping loop')
             print('| Cache file: {0}'.format(_cache_file))
@@ -2424,6 +2425,7 @@ def decontaminate(config_file):
                 'x': x, 'y': y, 'z': z, 'm': m, 'mnt': mnt, 'mnm': mnm,
                 'n': n, 'idf': idf, 'aexp': aexp,
                 'r200_start': r200_start, 'halo_id_start': halo_id_start,
+                'ncoarse_in_rtb_all': ncoarse_in_rtb_all,
                 'zinit_center': zinit_center, 'region_all_zoom': region_all_zoom,
                 '_rc_data': _rc_data, '_ql_data': _ql_data,
                 '_lagrange_iords': _lagrange_iords, '_central_iords': _central_iords,
