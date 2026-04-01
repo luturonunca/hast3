@@ -921,12 +921,19 @@ def _add_redshift_top_axis(ax, params, z_ticks=(0, 0.5, 1, 2, 3, 5, 7, 10)):
 
 def plot_merger_tree(nodes, edges, ax_tree, ax_mass, params, halo_color,
                      halo_label='', z_scale=None, proj=('x', 'y')):
-    """Node/line merger tree diagram — no snapshot loading.
+    """Ellipse merger tree diagram — no snapshot loading.
 
-    Left panel (ax_tree): branches as vertical lines, nodes as circles scaled
-    by log(mass). Main branch centred at x=0; merger branches staggered left/right.
-    Right panel (ax_mass): main-branch mass vs lookback time; orange verticals at mergers.
+    Left panel (ax_tree): each halo is an ellipse.
+      - X-axis: physical separation [kpc] from main halo at same snapshot (signed Δx).
+        Main halo always at x=0. X-limits = ±3 × rvir of root halo.
+      - Y-axis: lookback time [Gyr]; redshift labels on y-axis.
+      - Ellipse width = 2 × rvir [kpc] (data units).
+      - Ellipse height = half the mean z-tick spacing in lookback time [Gyr].
+      - Branches connected to their descendant by an elbow line.
+    Right panel (ax_mass): main-branch mass vs lookback time; vertical marks at mergers.
     """
+    from matplotlib.patches import Ellipse as _Ellipse
+
     if not nodes:
         for _ax in (ax_tree, ax_mass):
             _ax.text(0.5, 0.5, 'No tree data', transform=_ax.transAxes, ha='center')
@@ -935,11 +942,90 @@ def plot_merger_tree(nodes, edges, ax_tree, ax_mass, params, halo_color,
     col_main   = halo_color
     col_merger = '#e6550d'
 
-    # Build connectivity maps
-    desc_to_main = {}   # desc_idx -> main-progenitor node_idx
-    desc_to_all  = {}   # desc_idx -> [(prog_idx, etype)]
+    # Convert redshifts to lookback times
+    all_z  = np.array([nd['z'] for nd in nodes])
+    all_t  = _lookback_gyr(all_z, params)
+    node_t = {i: float(all_t[i]) for i in range(len(nodes))}
+
+    # z-tick positions and ellipse height
+    z_max_tree  = float(max(all_z)) if len(all_z) > 0 else 6.0
+    z_ticks     = list(range(0, int(np.floor(z_max_tree)) + 1))
+    t_ticks     = list(_lookback_gyr(np.array(z_ticks), params))
+    if len(t_ticks) > 1:
+        _spacings      = [abs(t_ticks[k+1] - t_ticks[k]) for k in range(len(t_ticks)-1)]
+        _tick_spacing  = float(np.mean(_spacings))
+    else:
+        _tick_spacing  = 1.0
+    _ell_h = 0.5 * _tick_spacing   # full ellipse height in Gyr
+
+    # Reference: root node (index 0, main halo at z_last)
+    _ref_rvir = float(nodes[0]['rvir']) if nodes[0]['rvir'] > 0 else 100.0
+    _xlim     = 3.0 * _ref_rvir
+
+    # Map snap -> main-branch node index (to compute branch x-offsets)
+    _snap_to_main = {}
+    for ni, nd in enumerate(nodes):
+        if nd['is_main']:
+            _snap_to_main[nd['snap']] = ni
+
+    # Compute x-centre for each node
+    _node_x = {}
+    for ni, nd in enumerate(nodes):
+        if nd['is_main']:
+            _node_x[ni] = 0.0
+        else:
+            _main_ni = _snap_to_main.get(nd['snap'])
+            if _main_ni is not None:
+                _dx = float(nd['pos'][0]) - float(nodes[_main_ni]['pos'][0])
+            else:
+                _dx = 0.0
+            # clamp so ellipse edge stays within xlim
+            _half_w = float(nd['rvir'])
+            _dx = float(np.clip(_dx, -_xlim + _half_w, _xlim - _half_w))
+            _node_x[ni] = _dx
+
+    # Draw elbow connectors (progenitor → descendant)
     for (prog_idx, desc_idx, etype) in edges:
-        desc_to_all.setdefault(desc_idx, []).append((prog_idx, etype))
+        if prog_idx not in _node_x or desc_idx not in _node_x:
+            continue
+        col  = col_main if etype == 'main' else col_merger
+        x0   = _node_x[desc_idx]
+        x1   = _node_x[prog_idx]
+        t0   = node_t[desc_idx]
+        t1   = node_t[prog_idx]
+        # Vertical from descendant to progenitor y-level, then horizontal to progenitor x
+        ax_tree.plot([x0, x0], [t0, t1], color=col, lw=1.2, alpha=0.7, zorder=2)
+        if abs(x1 - x0) > 1e-3:
+            ax_tree.plot([x0, x1], [t1, t1], color=col, lw=1.2, alpha=0.7, zorder=2)
+
+    # Draw ellipses
+    for ni, nd in enumerate(nodes):
+        if ni not in _node_x:
+            continue
+        col    = col_main if nd['is_main'] else col_merger
+        _ell_w = 2.0 * float(nd['rvir'])
+        _ell   = _Ellipse((_node_x[ni], node_t[ni]),
+                          width=_ell_w, height=_ell_h,
+                          facecolor=col, alpha=0.55, zorder=3)
+        ax_tree.add_patch(_ell)
+        _ell_edge = _Ellipse((_node_x[ni], node_t[ni]),
+                             width=_ell_w, height=_ell_h,
+                             fill=False, edgecolor=col, lw=1.2, zorder=4)
+        ax_tree.add_patch(_ell_edge)
+
+    ax_tree.set_xlim(-_xlim, _xlim)
+    ax_tree.set_ylim(min(node_t.values()) - _ell_h, max(node_t.values()) + _ell_h)
+    ax_tree.set_yticks(t_ticks)
+    ax_tree.set_yticklabels([str(z) for z in z_ticks])
+    ax_tree.set_ylabel('Redshift')
+    ax_tree.set_xlabel('Separation from main halo [kpc]')
+    ax_tree.set_title('Merger tree — {0}'.format(halo_label))
+    sns.despine(ax=ax_tree)
+
+    # --- Right panel: mass evolution ---
+    # Trace main chain
+    desc_to_main = {}
+    for (prog_idx, desc_idx, etype) in edges:
         if etype == 'main':
             desc_to_main[desc_idx] = prog_idx
 
@@ -952,74 +1038,11 @@ def plot_merger_tree(nodes, edges, ax_tree, ax_mass, params, halo_color,
         return chain
 
     main_chain = _trace_main(0) if nodes else []
-
-    # Assign x-positions: main branch at x=0, mergers staggered alternately
-    node_x = {ni: 0.0 for ni in main_chain}
-    _offset = 1.0
-    for ni in main_chain:
-        mergers = [(p, e) for p, e in desc_to_all.get(ni, []) if e == 'merger']
-        for k, (prog_idx, _) in enumerate(mergers):
-            node_x[prog_idx] = _offset * (1 if k % 2 == 0 else -1)
-            _offset += 0.5
-
-    # Convert redshifts to lookback times
-    all_z = np.array([nd['z'] for nd in nodes])
-    all_t = _lookback_gyr(all_z, params)
-    node_t = {i: float(all_t[i]) for i in range(len(nodes))}
-
-    # Node sizes proportional to log(mass)
-    m_arr   = np.array([nd['mass'] for nd in nodes])
-    m_valid = m_arr[m_arr > 0]
-    if len(m_valid) > 0:
-        log_m_min = np.log10(m_valid.min())
-        log_m_rng = max(np.log10(m_valid.max()) - log_m_min, 1.0)
-    else:
-        log_m_min, log_m_rng = 10.0, 1.0
-
-    def _node_size(mass):
-        if mass <= 0:
-            return 20
-        return 20 + 200 * (np.log10(mass) - log_m_min) / log_m_rng
-
-    # Draw edges
-    for (prog_idx, desc_idx, etype) in edges:
-        if desc_idx not in node_x or prog_idx not in node_x:
-            continue
-        col = col_main if etype == 'main' else col_merger
-        x0, x1 = node_x[desc_idx], node_x[prog_idx]
-        t0, t1 = node_t[desc_idx], node_t[prog_idx]
-        # Elbow: vertical segment then horizontal to merger branch
-        ax_tree.plot([x0, x0], [t0, t1], color=col, lw=1.5, alpha=0.8, zorder=2)
-        if x0 != x1:
-            ax_tree.plot([x0, x1], [t1, t1], color=col, lw=1.5, alpha=0.8, zorder=2)
-
-    # Draw nodes
-    for ni, nd in enumerate(nodes):
-        if ni not in node_x:
-            continue
-        col = col_main if nd['is_main'] else col_merger
-        ax_tree.scatter(node_x[ni], node_t[ni],
-                        s=_node_size(nd['mass']), color=col,
-                        edgecolors='white', linewidths=0.4, zorder=5)
-
-    # Redshift labels on right y-axis
-    z_max_tree = float(max(all_z)) if len(all_z) > 0 else 6.0
-    z_ticks    = [z for z in range(0, int(np.floor(z_max_tree)) + 1)]
-    t_ticks    = _lookback_gyr(np.array(z_ticks), params)
-    ax_tree.set_yticks(t_ticks)
-    ax_tree.set_yticklabels([str(z) for z in z_ticks])
-    ax_tree.set_ylabel('Redshift')
-    ax_tree.set_xlabel('')
-    ax_tree.set_xticks([])
-    ax_tree.set_title('Merger tree — {0}'.format(halo_label))
-    sns.despine(ax=ax_tree, bottom=True)
-
-    # --- Right panel: mass evolution ---
     if main_chain:
-        z_main  = np.array([nodes[i]['z'] for i in main_chain])
-        t_main  = _lookback_gyr(z_main, params)
-        m_main  = np.array([nodes[i]['mass'] for i in main_chain])
-        srt     = np.argsort(t_main)
+        z_main = np.array([nodes[i]['z'] for i in main_chain])
+        t_main = _lookback_gyr(z_main, params)
+        m_main = np.array([nodes[i]['mass'] for i in main_chain])
+        srt    = np.argsort(t_main)
         ax_mass.plot(t_main[srt], m_main[srt], color=col_main, lw=2)
 
     for (prog_idx, desc_idx, etype) in edges:
