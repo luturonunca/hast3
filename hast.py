@@ -2026,6 +2026,7 @@ def decontaminate(config_file):
         _lagrange_best_dz    = {_zt: float('inf') for _zt in range(0, 7)}
         _central_iords       = None  # iords within rexclude at z_last
         _lagrange_rvir_fracs = {}    # {frac: iord_array} — particles within frac*R200 at z_last
+        _companion_iords     = None  # iords of most massive companion at z_last; tracked forward
         _G_kpc            = 4.302e-6   # kpc Msol^-1 (km/s)^2
         _mt_nodes         = []    # merger tree nodes collected during tracking loop
         _mt_edges         = []    # merger tree edges collected during tracking loop
@@ -2240,21 +2241,24 @@ def decontaminate(config_file):
                 z[j-1] = hl[id,6] / _box_kpc_curr
                 m[j-1] = m200
                 n[j-1] = hl[id,3]
-                if(len(halo_rejected)>0):
-                    mnt[j-1] = np.sum(hl[halo_rejected,10])*to_msol
-                    _hr_max       = halo_rejected[np.argmax(hl[halo_rejected,10])]
-                    _r200_hr_est  = (hl[_hr_max,10]*3./(200.*4.*math.pi))**(1.0/3.0) * _box_kpc_curr
-                    try:
-                        _r200_hr = _virial_radius(_pos_curr, _mass_curr, _box_kpc_curr,
-                                                  hl[_hr_max,4:7], p.rvir_search*_r200_hr_est)
-                    except:
-                        _r200_hr = _r200_hr_est
-                    _vir_hr   = tree_part_curr.query_radius(hl[_hr_max,4:7].reshape(1,-1), _r200_hr)[0]
-                    mnm[j-1]  = float(np.sum(sim_curr['mass'][_vir_hr].in_units('Msol')))
-                else:
-                    mnt[j-1] = 0.0
-                    mnm[j-1] = 0.0
-                    idf[j-1] = np.max(ids_frac)
+                mnt[j-1] = np.sum(hl[halo_rejected,10])*to_msol if len(halo_rejected)>0 else 0.0
+                idf[j-1] = np.max(ids_frac)
+                if j == nfiles:
+                    # Identify most massive companion at z_last; seed tracking
+                    if len(halo_rejected) > 0:
+                        _hr_max      = halo_rejected[np.argmax(hl[halo_rejected,10])]
+                        _r200_hr_est = (hl[_hr_max,10]*3./(200.*4.*math.pi))**(1.0/3.0) * _box_kpc_curr
+                        try:
+                            _r200_hr = _virial_radius(_pos_curr, _mass_curr, _box_kpc_curr,
+                                                      hl[_hr_max,4:7], p.rvir_search*_r200_hr_est)
+                        except:
+                            _r200_hr = _r200_hr_est
+                        _vir_hr          = tree_part_curr.query_radius(hl[_hr_max,4:7].reshape(1,-1), _r200_hr)[0]
+                        mnm[j-1]         = float(np.sum(sim_curr['mass'][_vir_hr].in_units('Msol')))
+                        _companion_iords = np.array(sim_curr['iord'][_vir_hr])
+                    else:
+                        mnm[j-1]         = 0.0
+                        _companion_iords = None
                 aexp[j-1] = aexp_curr
                 k = j-1
                 # Piggyback: all analysis using already-loaded sim_curr — no re-loading.
@@ -2266,6 +2270,24 @@ def decontaminate(config_file):
                 _vel_pb      = np.array(sim_curr['vel'])
                 _iord_pb     = np.array(sim_curr['iord'])
                 _r_pb        = np.linalg.norm(_pos_pb - _cen_pb, axis=1)
+                # Track companion forward (j < nfiles): find its particles, identify host halo
+                if j < nfiles and _companion_iords is not None:
+                    _found_comp  = np.isin(_iord_pb, _companion_iords)
+                    if int(np.sum(_found_comp)) >= 10:
+                        _comp_cen    = np.mean(_pos_pb[_found_comp], axis=0)
+                        _comp_hi     = int(np.argmin(np.linalg.norm(hl[:,4:7] - _comp_cen, axis=1)))
+                        _r200_ce     = (hl[_comp_hi,10]*3./(200.*4.*math.pi))**(1.0/3.0) * _box_kpc_curr
+                        try:
+                            _r200_c  = _virial_radius(_pos_curr, _mass_curr, _box_kpc_curr,
+                                                      hl[_comp_hi,4:7], p.rvir_search*_r200_ce)
+                        except:
+                            _r200_c  = _r200_ce
+                        _vir_c       = tree_part_curr.query_radius(hl[_comp_hi,4:7].reshape(1,-1), _r200_c)[0]
+                        mnm[j-1]         = float(np.sum(sim_curr['mass'][_vir_c].in_units('Msol')))
+                        _companion_iords = np.array(sim_curr['iord'][_vir_c])
+                    else:
+                        mnm[j-1]         = 0.0
+                        _companion_iords = None
                 # Rotation curves (z <= 6, r <= 100 kpc)
                 if _snap_z_pb <= 6.0:
                     _in_rc = (_r_pb > 0) & (_r_pb <= 100.0)
