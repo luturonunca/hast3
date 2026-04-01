@@ -2218,18 +2218,16 @@ def decontaminate(config_file):
                 m[j-1] = m200
                 n[j-1] = hl[id,3]
                 if(len(halo_rejected)>0):
-                    _m_rejected = []
-                    for _hr in halo_rejected:
-                        _r200_hr_est = (hl[_hr,10]*3./(200.*4.*math.pi))**(1.0/3.0) * _box_kpc_curr
-                        try:
-                            _r200_hr = _virial_radius(_pos_curr, _mass_curr, _box_kpc_curr,
-                                                      hl[_hr,4:7], p.rvir_search*_r200_hr_est)
-                        except:
-                            _r200_hr = _r200_hr_est
-                        _vir_hr  = tree_part_curr.query_radius(hl[_hr,4:7].reshape(1,-1), _r200_hr)[0]
-                        _m_rejected.append(float(np.sum(sim_curr['mass'][_vir_hr].in_units('Msol'))))
-                    mnt[j-1] = np.sum(_m_rejected)
-                    mnm[j-1] = np.max(_m_rejected)
+                    mnt[j-1] = np.sum(hl[halo_rejected,10])*to_msol
+                    _hr_max       = halo_rejected[np.argmax(hl[halo_rejected,10])]
+                    _r200_hr_est  = (hl[_hr_max,10]*3./(200.*4.*math.pi))**(1.0/3.0) * _box_kpc_curr
+                    try:
+                        _r200_hr = _virial_radius(_pos_curr, _mass_curr, _box_kpc_curr,
+                                                  hl[_hr_max,4:7], p.rvir_search*_r200_hr_est)
+                    except:
+                        _r200_hr = _r200_hr_est
+                    _vir_hr   = tree_part_curr.query_radius(hl[_hr_max,4:7].reshape(1,-1), _r200_hr)[0]
+                    mnm[j-1]  = float(np.sum(sim_curr['mass'][_vir_hr].in_units('Msol')))
                 else:
                     mnt[j-1] = 0.0
                     mnm[j-1] = 0.0
