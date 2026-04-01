@@ -2218,8 +2218,13 @@ def decontaminate(config_file):
                 m[j-1] = m200
                 n[j-1] = hl[id,3]
                 if(len(halo_rejected)>0):
-                    mnt[j-1] = np.sum(hl[halo_rejected,10])*to_msol
-                    mnm[j-1] = np.max(hl[halo_rejected,10])*to_msol
+                    _m_rejected = []
+                    for _hr in halo_rejected:
+                        _r200_hr = (hl[_hr,10]*3./(200.*4.*math.pi))**(1.0/3.0) * _box_kpc_curr
+                        _vir_hr  = tree_part_curr.query_radius(hl[_hr,4:7].reshape(1,-1), _r200_hr)[0]
+                        _m_rejected.append(float(np.sum(sim_curr['mass'][_vir_hr].in_units('Msol'))))
+                    mnt[j-1] = np.sum(_m_rejected)
+                    mnm[j-1] = np.max(_m_rejected)
                 else:
                     mnt[j-1] = 0.0
                     mnm[j-1] = 0.0
