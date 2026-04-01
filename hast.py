@@ -2214,7 +2214,7 @@ def decontaminate(config_file):
                 x[j-1] = hl[id,4] / _box_kpc_curr
                 y[j-1] = hl[id,5] / _box_kpc_curr
                 z[j-1] = hl[id,6] / _box_kpc_curr
-                m[j-1] = hl[id,10]*to_msol
+                m[j-1] = m200
                 n[j-1] = hl[id,3]
                 if(len(halo_rejected)>0):
                     mnt[j-1] = np.sum(hl[halo_rejected,10])*to_msol
@@ -2721,7 +2721,7 @@ def decontaminate(config_file):
                     _sm6.set_array([])
                     fig6.colorbar(_sm6, ax=axes6[1], location='right',
                                   label='redshift', shrink=0.8)
-                    axes6[0].set_title('Lagrangian regions at z_init — R200 particles by redshift')
+                    fig6.suptitle('Lagrangian regions at z_init — R200 particles by redshift')
                     pdf.savefig(fig6, dpi=100)
                 else:
                     print('| [Warning] No Lagrangian iords collected — skipping page 6')
@@ -2761,7 +2761,7 @@ def decontaminate(config_file):
                     _sm7.set_array([])
                     fig7.colorbar(_sm7, ax=axes7[1], location='right',
                                   label='fraction of R200 at z=0', shrink=0.8)
-                    axes7[0].set_title('Lagrangian origin at z_init — particles within f x R200 at z=0')
+                    fig7.suptitle('Lagrangian origin at z_init — particles within f x R200 at z=0')
                     pdf.savefig(fig7, dpi=100)
                 else:
                     print('| [Warning] No rvir-fraction iords collected — skipping page 7')
