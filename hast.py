@@ -2367,7 +2367,7 @@ def decontaminate(config_file):
                     # Precompute host-halo centres and rvirs once per snapshot
                     _host_idx  = np.array([_hi for _hi, _hr in enumerate(hl)
                                            if int(_hr[2]) == int(_hr[0])])
-                    _host_cen  = hl[_host_idx, 4:7] * aexp_curr   # comoving → physical kpc
+                    _host_cen  = hl[_host_idx, 4:7]
                     _host_rvir = np.array([_rvir_kpc(hl[_hi, 10] * to_msol, _mt_params_s)
                                            for _hi in _host_idx])
                     _new_watch = []
@@ -2391,12 +2391,8 @@ def decontaminate(config_file):
                         _dist_mat = np.linalg.norm(
                             _found_pos[:, None, :] - _host_cen[None, :, :], axis=2)
                         _in_mat   = _dist_mat <= _host_rvir[None, :]   # (N, H) bool
-                        # Overlap resolution: assign each particle to its nearest host centre
-                        _nearest  = np.argmin(_dist_mat, axis=1)        # (N,)
-                        # Count: particle counts for a halo only if inside AND nearest
-                        _counts   = np.bincount(
-                            _nearest[_in_mat[np.arange(_n_found), _nearest]],
-                            minlength=len(_host_idx))
+                        # Count: all tracked particles inside each halo's rvir
+                        _counts   = np.sum(_in_mat, axis=0)             # (H,)
                         _thresh_s = _mt_npart_thresh
                         _valid_vi = np.where(_counts >= _thresh_s)[0]
                         print('[merger_tree]   host_halos={0}  above_thresh={1}'.format(
@@ -2427,8 +2423,8 @@ def decontaminate(config_file):
                                 _q_n, _lam_n = None, None
                             if _is_main:
                                 _rank0_x_ref = _dyn_com[0]
-                            # Branch iords: sampled particles assigned to this halo
-                            _branch_mask = _in_mat[:, _vi] & (_nearest == _vi)
+                            # Branch iords: all tracked particles inside this halo's rvir
+                            _branch_mask = _in_mat[:, _vi]
                             _branch_iord = _found_iord[_branch_mask]
                             _all_branch_iords.append(_branch_iord)
                             _node_idx = len(_mt_nodes)
