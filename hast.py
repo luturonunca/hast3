@@ -920,7 +920,7 @@ def _add_redshift_top_axis(ax, params, z_ticks=(0, 0.5, 1, 2, 3, 5, 7, 10)):
 
 
 def plot_merger_tree(nodes, edges, ax_tree, ax_mass, params, halo_color,
-                     halo_label='', z_scale=None, proj=('x', 'y')):
+                     halo_label='', z_scale=None, proj=('x', 'y'), unassigned_pts=None):
     """Ellipse merger tree diagram — no snapshot loading.
 
     Left panel (ax_tree): each halo is an ellipse.
@@ -1012,6 +1012,13 @@ def plot_merger_tree(nodes, edges, ax_tree, ax_mass, params, halo_color,
                              width=_ell_w, height=_ell_h,
                              fill=False, edgecolor=col, lw=1.2, zorder=4)
         ax_tree.add_patch(_ell_edge)
+
+    # Scatter tracked particles not inside any host halo
+    if unassigned_pts:
+        for (_t_snap, _x_offs) in unassigned_pts:
+            _x_c = np.clip(_x_offs, -_xlim, _xlim)
+            ax_tree.scatter(_x_c, np.full(len(_x_c), _t_snap),
+                            s=1, color='gray', alpha=0.25, zorder=1, linewidths=0)
 
     ax_tree.set_xlim(-_xlim, _xlim)
     ax_tree.set_ylim(min(node_t.values()) - _ell_h, max(node_t.values()) + _ell_h)
@@ -1997,6 +2004,7 @@ def decontaminate(config_file):
             _lagrange_rvir_fracs = _cache.get('_lagrange_rvir_fracs', {})
             _mt_nodes            = _cache['_mt_nodes']
             _mt_edges            = _cache['_mt_edges']
+            _mt_unassigned_pts   = _cache.get('_mt_unassigned_pts', [])
             # Recompute sim_zinit-derived variables (fast, no snapshot load needed)
             _ind_c              = sim_zinit['iord'][region_all_zoom]
             region_zinit        = np.searchsorted(sim_zinit['iord'], _ind_c, side='left')
@@ -2030,6 +2038,7 @@ def decontaminate(config_file):
         _G_kpc            = 4.302e-6   # kpc Msol^-1 (km/s)^2
         _mt_nodes         = []    # merger tree nodes collected during tracking loop
         _mt_edges         = []    # merger tree edges collected during tracking loop
+        _mt_unassigned_pts = []   # [(t_lookback_gyr, x_offsets_kpc)] for particles not in any halo
         _mt_watch         = []    # [(parent_node_idx, tracked_iord_array)]
         _mt_cosmo         = None  # cosmological params (H0/omega_m/omega_l), read once at j==nfiles
         _mt_npart_thresh  = 20    # min tracked particles for a halo to appear in the tree
@@ -2397,6 +2406,8 @@ def decontaminate(config_file):
                         if len(_valid_vi) == 0:
                             continue
                         _valid_vi = _valid_vi[np.argsort(_counts[_valid_vi])[::-1]]
+                        _all_branch_iords = []
+                        _rank0_x_ref      = None
                         for _rank, _vi in enumerate(_valid_vi):
                             _hi      = _host_idx[_vi]
                             _hrow_mt = hl[_hi]
@@ -2416,9 +2427,12 @@ def decontaminate(config_file):
                             else:
                                 _dyn_com = _hrow_mt[4:7]
                                 _q_n, _lam_n = None, None
+                            if _is_main:
+                                _rank0_x_ref = _dyn_com[0]
                             # Branch iords: sampled particles assigned to this halo
                             _branch_mask = _in_mat[:, _vi] & (_nearest == _vi)
                             _branch_iord = _found_iord[_branch_mask]
+                            _all_branch_iords.append(_branch_iord)
                             _node_idx = len(_mt_nodes)
                             _mt_nodes.append({
                                 'snap':    list[j-1],
@@ -2437,6 +2451,14 @@ def decontaminate(config_file):
                             _new_watch.append((_node_idx, _branch_iord))
                             print('[merger_tree]   {0} halo_id={1}  count={2}'.format(
                                 'main' if _is_main else 'merger', int(_hrow_mt[0]), _counts[_vi]))
+                        # collect particles not assigned to any halo for scatter plot
+                        if _rank0_x_ref is not None and _all_branch_iords:
+                            _asgn_iords  = np.concatenate(_all_branch_iords)
+                            _unasgn_mask = ~np.isin(_found_iord, _asgn_iords)
+                            if np.any(_unasgn_mask):
+                                _t_snap = _lookback_gyr(_snap_z_pb, _mt_params_s)
+                                _mt_unassigned_pts.append(
+                                    (_t_snap, _found_pos[_unasgn_mask, 0] - _rank0_x_ref))
                     _mt_watch = _new_watch
             else:
                 print(_pfx+' ------------------------------------------------------------')
@@ -2484,6 +2506,7 @@ def decontaminate(config_file):
                 '_lagrange_iords': _lagrange_iords, '_central_iords': _central_iords,
                 '_lagrange_rvir_fracs': _lagrange_rvir_fracs,
                 '_mt_nodes': _mt_nodes, '_mt_edges': _mt_edges,
+                '_mt_unassigned_pts': _mt_unassigned_pts,
             }
             try:
                 with open(_cache_file, 'wb') as _cf:
@@ -2698,7 +2721,8 @@ def decontaminate(config_file):
                         fig_mt, (ax_t, ax_m) = pyplot.subplots(
                             1, 2, figsize=(18, 8), constrained_layout=True)
                         plot_merger_tree(nodes_mt, edges_mt, ax_t, ax_m, params_dyn,
-                                         halo_label='tracked', halo_color=cp[0])
+                                         halo_label='tracked', halo_color=cp[0],
+                                         unassigned_pts=_mt_unassigned_pts)
                         pdf.savefig(fig_mt, dpi=100)
                     else:
                         print('| [Warning] merger tree empty for halo {0}'.format(halo_id_start))
