@@ -2367,7 +2367,7 @@ def decontaminate(config_file):
                     # Precompute host-halo centres and rvirs once per snapshot
                     _host_idx  = np.array([_hi for _hi, _hr in enumerate(hl)
                                            if int(_hr[2]) == int(_hr[0])])
-                    _host_cen  = hl[_host_idx, 4:7]
+                    _host_cen  = hl[_host_idx, 4:7] * aexp_curr   # comoving → physical kpc
                     _host_rvir = np.array([_rvir_kpc(hl[_hi, 10] * to_msol, _mt_params_s)
                                            for _hi in _host_idx])
                     _new_watch = []
@@ -2397,9 +2397,7 @@ def decontaminate(config_file):
                         _counts   = np.bincount(
                             _nearest[_in_mat[np.arange(_n_found), _nearest]],
                             minlength=len(_host_idx))
-                        # Scale threshold to sample fraction
-                        _frac     = _n_found / max(len(_tracked_iord), 1)
-                        _thresh_s = max(_mt_npart_thresh, int(0.05 * _n_found))
+                        _thresh_s = _mt_npart_thresh
                         _valid_vi = np.where(_counts >= _thresh_s)[0]
                         print('[merger_tree]   host_halos={0}  above_thresh={1}'.format(
                             len(_host_idx), len(_valid_vi)))
