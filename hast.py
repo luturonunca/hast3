@@ -2237,7 +2237,8 @@ def decontaminate(config_file):
                 except:
                     pass
                 # Computing convex hulls volumes
-                hull = ConvexHull(np.array(sim_zinit['pos'])[region_zinit][allowed])
+                _pts_allowed = np.array(sim_zinit['pos'])[region_zinit][allowed]
+                hull = ConvexHull(_pts_allowed - _pts_allowed.mean(axis=0))
                 hull_zoom = ConvexHull(np.array(sim_zinit['pos'])[zoom_init])
                 print(_pfx+' Convex Hull coarse part -> vol={0:.3e} dens={1:.3e}'.format(hull.volume,float(np.sum(sim_zinit['mass'][region_zinit][allowed])/hull.volume)))
                 print(_pfx+' Convex Hull zoom part   -> vol={0:.3e} dens={1:.3e}'.format(hull_zoom.volume,float(np.sum(sim_zinit['mass'][zoom_init])/hull_zoom.volume)))
@@ -2464,7 +2465,7 @@ def decontaminate(config_file):
         if(len(coarse_in_rtb_init)>0):
             try:
                 _box_kpc_zinit = float(sim_zinit.properties['boxsize'].in_units('kpc'))
-                _hull_pts = np.array(sim_zinit['pos'])[region_zinit][allowed][hull.vertices] / _box_kpc_zinit - shift
+                _hull_pts = _pts_allowed[hull.vertices] / _box_kpc_zinit - shift
                 _rng = np.random.RandomState(seed=12345)
                 _hull_pts = _hull_pts + _rng.randn(*_hull_pts.shape) * 1e-7
                 np.savetxt((p.fname).strip()+'_part', _hull_pts)
