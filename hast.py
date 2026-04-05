@@ -2463,7 +2463,11 @@ def decontaminate(config_file):
     if not _cache_loaded:
         if(len(coarse_in_rtb_init)>0):
             try:
-                np.savetxt((p.fname).strip()+'_part',np.array(sim_zinit['pos'])[region_zinit][allowed][hull.vertices]-shift)
+                _box_kpc_zinit = float(sim_zinit.properties['boxsize'].in_units('kpc'))
+                _hull_pts = np.array(sim_zinit['pos'])[region_zinit][allowed][hull.vertices] / _box_kpc_zinit - shift
+                _rng = np.random.RandomState(seed=12345)
+                _hull_pts = _hull_pts + _rng.randn(*_hull_pts.shape) * 1e-7
+                np.savetxt((p.fname).strip()+'_part', _hull_pts)
                 print('| Particle list outputed to '+(p.fname).strip())
             except:
                 print('[Error] Cannot write file '+(p.fname).strip())
