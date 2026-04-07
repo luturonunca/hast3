@@ -2621,13 +2621,19 @@ def decontaminate(config_file):
                 hl_cy    = halo_pos_comov[dproj[i][1] - 4]
                 zinit_cx = zinit_center[dproj[i][0]-4] / aexp_zinit / 1000.
                 zinit_cy = zinit_center[dproj[i][1]-4] / aexp_zinit / 1000.
-                r200_comov    = r200_start / aexp_zlast / 1000.
-                rexclude_comov = p.rexclude / aexp_zinit / 1000.
+                r200_comov = r200_start / aexp_zlast / 1000.
+                # Categorise contaminants at z_init for scatter colouring
+                _r200_reg_plt  = np.searchsorted(sim_zinit['iord'], _r200_iords) if len(_r200_iords) > 0 else np.array([], dtype=int)
+                _rex_reg_plt   = _rexclude_region_zinit
+                _r200_only_plt = _r200_reg_plt[~np.isin(_r200_reg_plt, _rex_reg_plt)]
+                _all_coarse_zi = region_zinit[coarse_in_rtb_init[0]]
+                _broad_only_plt = _all_coarse_zi[~np.isin(_all_coarse_zi, _r200_reg_plt)]
                 try:
-                    xmin_coarse_in_rtb = float(np.min(zinit_x[region_zinit][coarse_in_rtb_init]))
-                    ymin_coarse_in_rtb = float(np.min(zinit_y[region_zinit][coarse_in_rtb_init]))
-                    xmax_coarse_in_rtb = float(np.max(zinit_x[region_zinit][coarse_in_rtb_init]))
-                    ymax_coarse_in_rtb = float(np.max(zinit_y[region_zinit][coarse_in_rtb_init]))
+                    _all_cont = np.concatenate([zinit_x[_all_coarse_zi], zinit_y[_all_coarse_zi]])
+                    xmin_coarse_in_rtb = float(np.min(zinit_x[_all_coarse_zi]))
+                    ymin_coarse_in_rtb = float(np.min(zinit_y[_all_coarse_zi]))
+                    xmax_coarse_in_rtb = float(np.max(zinit_x[_all_coarse_zi]))
+                    ymax_coarse_in_rtb = float(np.max(zinit_y[_all_coarse_zi]))
                 except:
                     xmin_coarse_in_rtb = 1.0
                     ymin_coarse_in_rtb = 1.0
@@ -2646,32 +2652,40 @@ def decontaminate(config_file):
                 im,xedges,yedges = np.histogram2d(zlast_x[zoom_part],zlast_y[zoom_part],
                     weights=np.array(sim_zlast['mass'])[zoom_part],bins=1024,range=[[pmin,pmax],[pmin,pmax]])
                 im = np.rot90(im)
-                # Plotting 2D Convex Hull
-                points_2d = np.squeeze([[zinit_x[region_zinit][allowed]],
-                    [zinit_y[region_zinit][allowed]]]).transpose()
+                # Original zoom region hull
+                points_2d = np.column_stack([zinit_x[zoom_init], zinit_y[zoom_init]])
                 hull2d = ConvexHull(points_2d)
-                ax[i].plot(zinit_x[region_zinit][allowed][np.append(hull2d.vertices,hull2d.vertices[0])],
-                    zinit_y[region_zinit][allowed][np.append(hull2d.vertices,hull2d.vertices[0])],
-                    'k-',lw=1.,color=cp[5],label='Lagrangian volume')
-                points_2d = np.squeeze([[zinit_x[zoom_init]],[zinit_y[zoom_init]]]).transpose()
+                _v = np.append(hull2d.vertices, hull2d.vertices[0])
+                ax[i].plot(points_2d[_v,0], points_2d[_v,1], lw=1., color=cp[3], label='Original zoom region')
+                # Corrected zoom region hull (zoom + rexclude contaminants)
+                points_2d = np.column_stack([zinit_x[region_zinit][allowed], zinit_y[region_zinit][allowed]])
                 hull2d = ConvexHull(points_2d)
-                ax[i].plot(zinit_x[zoom_init][np.append(hull2d.vertices,hull2d.vertices[0])],
-                    zinit_y[zoom_init][np.append(hull2d.vertices,hull2d.vertices[0])],
-                    'k-',lw=1.,color=cp[3],label='Lagrangian volume zoom part')
-                # Plot z_init centroid as x marker; z_last center shown by R200 circle
-                h2 = ax[i].scatter(zinit_cx,zinit_cy,c=cp[1],alpha=0.35,zorder=10,marker='x',s=100)
-                # Plot R200 circle
-                an = np.linspace(0,2*np.pi,100)
-                ax[i].plot(r200_comov*np.cos(an)+hl_cx,r200_comov*np.sin(an)+hl_cy,color=cp[1],label='R200',lw=1.)
-                ax[i].plot(p.rvir*r200_comov*np.cos(an)+hl_cx,p.rvir*r200_comov*np.sin(an)+hl_cy,color=cp[2],label='Rtb',lw=1.)
-                ax[i].plot(rexclude_comov*np.cos(an)+zinit_cx,rexclude_comov*np.sin(an)+zinit_cy,color='k',label='Rexclude',lw=1.)
-                # Plot contaminating particles
-                if(ncoarse_in_rtb_all>0):
-                    points_2d = np.vstack((zinit_x[region_zinit][coarse_in_rtb_init],zinit_y[region_zinit][coarse_in_rtb_init])).transpose()
-                    points_2d = np.round(points_2d*2e6)/2e6
-                    unique_points_2d = __unique_rows(points_2d)
-                    ax[i].scatter(unique_points_2d[:,0],unique_points_2d[:,1],
-                        c=cp[4],marker='+',s=5,alpha=0.50,linewidth=0.5,label='Contaminating part initial')
+                _v = np.append(hull2d.vertices, hull2d.vertices[0])
+                ax[i].plot(points_2d[_v,0], points_2d[_v,1], lw=1., color=cp[5], label='Corrected zoom region')
+                # Wide zoom region hull (zoom + R200 contaminants)
+                if len(_r200_reg_plt) > 0:
+                    _wide_x = np.concatenate([zinit_x[zoom_init], zinit_x[_r200_reg_plt]])
+                    _wide_y = np.concatenate([zinit_y[zoom_init], zinit_y[_r200_reg_plt]])
+                    points_2d = np.column_stack([_wide_x, _wide_y])
+                    hull2d = ConvexHull(points_2d)
+                    _v = np.append(hull2d.vertices, hull2d.vertices[0])
+                    ax[i].plot(points_2d[_v,0], points_2d[_v,1], lw=1., color=cp[0], ls='--', label='Wide zoom region (R200)')
+                # z_init centroid
+                ax[i].scatter(zinit_cx, zinit_cy, c=cp[1], alpha=0.35, zorder=10, marker='x', s=100)
+                # R200 and Rtb circles at z_last halo position
+                an = np.linspace(0, 2*np.pi, 100)
+                ax[i].plot(r200_comov*np.cos(an)+hl_cx, r200_comov*np.sin(an)+hl_cy, color=cp[1], label='R200', lw=1.)
+                ax[i].plot(p.rvir*r200_comov*np.cos(an)+hl_cx, p.rvir*r200_comov*np.sin(an)+hl_cy, color=cp[2], label='Rtb', lw=1.)
+                # Contaminating particles split by category
+                if len(_rex_reg_plt) > 0:
+                    ax[i].scatter(zinit_x[_rex_reg_plt], zinit_y[_rex_reg_plt],
+                        c=cp[3], marker='+', s=15, alpha=0.8, linewidth=0.8, label='Rexclude contaminants ({0})'.format(len(_rex_reg_plt)))
+                if len(_r200_only_plt) > 0:
+                    ax[i].scatter(zinit_x[_r200_only_plt], zinit_y[_r200_only_plt],
+                        c=cp[0], marker='x', s=10, alpha=0.7, linewidth=0.7, label='R200 contaminants ({0})'.format(len(_r200_only_plt)))
+                if len(_broad_only_plt) > 0:
+                    ax[i].scatter(zinit_x[_broad_only_plt], zinit_y[_broad_only_plt],
+                        c=cp[4], marker='.', s=5, alpha=0.4, linewidth=0.5, label='Broad contaminants ({0})'.format(len(_broad_only_plt)))
                 tv = ax[i].imshow(np.log10(im),cmap='bone_r',interpolation='quadric',aspect='equal',extent=[pmin,pmax,pmin,pmax])
             ax[0].legend(loc='upper right',frameon=False,ncol=1,fontsize=8,markerscale=1.5)
             pyplot.tight_layout()
