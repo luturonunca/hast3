@@ -3003,6 +3003,26 @@ class config_merge_regions_obj():
             self.noise_seed = int(config.get('merge_regions', 'noise_seed'))
         except:
             self.noise_seed = 12345
+        try:
+            self.cache_a  = config.get('merge_regions', 'cache_a')
+        except:
+            self.cache_a  = ''
+        try:
+            self.cache_b  = config.get('merge_regions', 'cache_b')
+        except:
+            self.cache_b  = ''
+        try:
+            self.output_dir = config.get('merge_regions', 'output_dir')
+        except:
+            self.output_dir = ''
+        try:
+            self.label_a  = config.get('merge_regions', 'label_a')
+        except:
+            self.label_a  = 'Halo A'
+        try:
+            self.label_b  = config.get('merge_regions', 'label_b')
+        except:
+            self.label_b  = 'Halo B'
 
 
 def merge_regions(config_file):
@@ -3063,6 +3083,35 @@ def merge_regions(config_file):
     print('| Merged hull volume      = {0:.6e}'.format(hull_merged.volume))
     print('| ------------------------------------------------------------')
 
+    # --- Optional: load tracking caches for comparison plots ---
+    import pickle as _pickle
+    _cache_a = None
+    _cache_b = None
+    if p.cache_a:
+        try:
+            with open(p.cache_a, 'rb') as _f:
+                _cache_a = _pickle.load(_f)
+            print('| Cache A loaded: {0}'.format(p.cache_a))
+        except Exception as _e:
+            print('| [Warning] Cannot load cache_a: {0}'.format(_e))
+    if p.cache_b:
+        try:
+            with open(p.cache_b, 'rb') as _f:
+                _cache_b = _pickle.load(_f)
+            print('| Cache B loaded: {0}'.format(p.cache_b))
+        except Exception as _e:
+            print('| [Warning] Cannot load cache_b: {0}'.format(_e))
+
+    _params_merge = None
+    if p.output_dir and (_cache_a is not None or _cache_b is not None):
+        try:
+            _snap_list = sorted(glob.glob(p.output_dir + '/output_?????'))
+            if _snap_list:
+                _params_merge = _read_info_params(_snap_list[-1])
+                print('| Cosmology params read from {0}'.format(_snap_list[-1]))
+        except Exception as _e:
+            print('| [Warning] Could not read cosmology params: {0}'.format(_e))
+
     if p.plot:
         try:
             flatui_m = ["#3498db", "#e74c3c", "#2ecc71"]
@@ -3070,13 +3119,14 @@ def merge_regions(config_file):
             sns.set_context('poster')
             out = p.fname.strip() + '_merged.pdf'
             with PdfPages(out) as pdf:
+                # Page 1: hull projections
                 fig, axes = pyplot.subplots(1, 3, figsize=(18, 6), constrained_layout=True)
                 proj_labels = [('x [code]', 'y [code]', 0, 1),
                                ('x [code]', 'z [code]', 0, 2),
                                ('y [code]', 'z [code]', 1, 2)]
                 for ax, (xl, yl, xi, yi) in zip(axes, proj_labels):
-                    for pts, col, lbl in [(pts_a, cp_m[0], 'Region A'),
-                                          (pts_b, cp_m[1], 'Region B'),
+                    for pts, col, lbl in [(pts_a, cp_m[0], p.label_a),
+                                          (pts_b, cp_m[1], p.label_b),
                                           (pts_merged[hull_merged.vertices], cp_m[2], 'Merged')]:
                         pts2d = pts[:, [xi, yi]]
                         if len(pts2d) >= 4:
@@ -3095,6 +3145,87 @@ def merge_regions(config_file):
                     p.region_a, p.region_b))
                 pdf.savefig(fig, dpi=100)
                 pyplot.close(fig)
+
+                # Page 2: rotation curves side-by-side (requires caches)
+                if _cache_a is not None and _cache_b is not None:
+                    try:
+                        sns.set_style("ticks", {"axes.grid": False,
+                                                "xtick.direction": 'in',
+                                                "ytick.direction": 'in'})
+                        fig2, (ax_rca, ax_rcb) = pyplot.subplots(1, 2, figsize=(18, 8),
+                                                                   constrained_layout=True)
+                        _cmap_rc = pyplot.cm.tab20b
+                        _norm_rc = pyplot.Normalize(vmin=0, vmax=6)
+                        for _ax_rc, _cache, _lbl in [(ax_rca, _cache_a, p.label_a),
+                                                      (ax_rcb, _cache_b, p.label_b)]:
+                            for _snap_z, _r_kpc, _v_kms in _cache.get('_rc_data', []):
+                                _ax_rc.plot(_r_kpc, _v_kms,
+                                            color=_cmap_rc(_norm_rc(_snap_z)),
+                                            lw=0.8, alpha=0.8)
+                            _sm2 = pyplot.cm.ScalarMappable(cmap=_cmap_rc, norm=_norm_rc)
+                            _sm2.set_array([])
+                            pyplot.colorbar(_sm2, ax=_ax_rc, label='Redshift')
+                            _ax_rc.set_xlabel('$r$ [kpc]')
+                            _ax_rc.set_ylabel('$V_{\\rm circ}$ [km/s]')
+                            _ax_rc.set_title('Rotation curves — {0}'.format(_lbl))
+                        # Enforce identical axis limits across both panels
+                        _xlim_rc = (min(ax_rca.get_xlim()[0], ax_rcb.get_xlim()[0]),
+                                    max(ax_rca.get_xlim()[1], ax_rcb.get_xlim()[1]))
+                        _ylim_rc = (min(ax_rca.get_ylim()[0], ax_rcb.get_ylim()[0]),
+                                    max(ax_rca.get_ylim()[1], ax_rcb.get_ylim()[1]))
+                        ax_rca.set_xlim(_xlim_rc);  ax_rcb.set_xlim(_xlim_rc)
+                        ax_rca.set_ylim(_ylim_rc);  ax_rcb.set_ylim(_ylim_rc)
+                        pdf.savefig(fig2, dpi=100)
+                        pyplot.close(fig2)
+                    except Exception as _e2:
+                        print('| [Warning] Rotation curves page failed: {0}'.format(_e2))
+
+                # Page 3: q and lambda vs lookback time, both halos overplotted
+                if _cache_a is not None and _cache_b is not None and _params_merge is not None:
+                    try:
+                        sns.set_style("darkgrid", {"axes.facecolor": ".9"})
+                        fig3, ax_ql = pyplot.subplots(1, 1, figsize=(10, 8))
+                        _col_q   = [cp_m[0], cp_m[1]]
+                        _col_lam = [cp_m[0], cp_m[1]]
+                        for _cache, _lbl, _cq, _cl, _ls in [
+                                (_cache_a, p.label_a, cp_m[0], cp_m[0], '-'),
+                                (_cache_b, p.label_b, cp_m[1], cp_m[1], '--')]:
+                            _ql = _cache.get('_ql_data', [])
+                            if not _ql:
+                                continue
+                            _t_arr   = np.array([_lookback_gyr(1.0/_a - 1.0, _params_merge)
+                                                  for _a, _q, _l in _ql])
+                            _q_arr   = np.array([_q  for _a, _q, _l in _ql])
+                            _lam_arr = np.array([_l  for _a, _q, _l in _ql])
+                            _srt     = np.argsort(_t_arr)
+                            _t_arr   = _t_arr[_srt]
+                            _q_arr   = _q_arr[_srt]
+                            _lam_arr = _lam_arr[_srt]
+                            ax_ql.plot(_t_arr, _q_arr,   color=_cq, lw=1.5, ls=_ls,
+                                       label='$q$ — {0}'.format(_lbl))
+                            ax_ql.plot(_t_arr, _lam_arr, color=_cl, lw=1.5, ls=_ls,
+                                       alpha=0.6, label='$\\lambda$ — {0}'.format(_lbl))
+                        ax_ql.axhline(0, color='grey', lw=0.8, ls='--', alpha=0.6)
+                        ax_ql.set_ylim(-1.0, 0.6)
+                        ax_ql.set_xlim(0.0, 13.0)
+                        ax_ql.set_xlabel('Lookback time [Gyr]')
+                        ax_ql.set_ylabel('$q$, $\\lambda$')
+                        ax_ql.legend(fontsize=9)
+                        # redshift top axis
+                        _z_ticks = [0, 0.5, 1, 2, 3, 5, 7, 10]
+                        _t_ticks = _lookback_gyr(_z_ticks, _params_merge)
+                        _ax_z = ax_ql.twiny()
+                        _ax_z.set_xlim(ax_ql.get_xlim())
+                        _ax_z.set_xticks(_t_ticks)
+                        _ax_z.set_xticklabels([str(_zz) for _zz in _z_ticks])
+                        _ax_z.set_xlabel('Redshift')
+                        sns.despine(ax=ax_ql)
+                        pyplot.tight_layout()
+                        pdf.savefig(fig3, dpi=100)
+                        pyplot.close(fig3)
+                    except Exception as _e3:
+                        print('| [Warning] q/lambda page failed: {0}'.format(_e3))
+
             print('| Diagnostic plot written to {0}'.format(out))
         except Exception as _ep:
             print('| [Warning] Plot failed: {0}'.format(_ep))
