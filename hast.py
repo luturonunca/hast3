@@ -3144,7 +3144,7 @@ def merge_regions(config_file):
                     ax.set_aspect('equal')
                 axes[0].legend(fontsize=10)
                 fig.suptitle('Merged Lagrangian regions\nA: {0}   B: {1}'.format(
-                    p.region_a, p.region_b))
+                    p.label_a, p.label_b))
                 pdf.savefig(fig, dpi=100)
                 pyplot.close(fig)
 
@@ -3213,7 +3213,7 @@ def merge_regions(config_file):
                         ax_ql.set_xlim(0.0, 13.0)
                         ax_ql.set_xlabel('Lookback time [Gyr]')
                         ax_ql.set_ylabel('$q$, $\\lambda$')
-                        ax_ql.legend(fontsize=9)
+                        ax_ql.legend(fontsize=14)
                         # redshift top axis
                         _z_ticks = [0, 0.5, 1, 2, 3, 5, 7, 10]
                         _t_ticks = _lookback_gyr(_z_ticks, _ql_params)
