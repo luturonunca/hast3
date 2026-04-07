@@ -1910,6 +1910,10 @@ class config_decontamination_obj():
             self.lagrange_iords = config.getboolean('decontamination','lagrange_iords')
         except:
             self.lagrange_iords = True
+        try:
+            self.seed_iords_file = config.get('decontamination','seed_iords_file')
+        except:
+            self.seed_iords_file = ''
 
 
 def __halo_list_tracking(output,conf):
@@ -2001,6 +2005,34 @@ def decontaminate(config_file):
     except IOError:
         print('[Error] {0} file specified cannot be read'.format(p.output_zinit))
         sys.exit()
+
+    # --- Seed iords mode: derive halo coordinates from particle centroid at z_last ---
+    _seed_iords = None
+    if p.seed_iords_file:
+        print('| ------------------------------------------------------------')
+        print('| Seed iords mode: loading {0}'.format(p.seed_iords_file))
+        _seed_iords = np.loadtxt(p.seed_iords_file, dtype=np.int64)
+        print('| Seed iords loaded: {0} particles'.format(len(_seed_iords)))
+        try:
+            _sim_zlast = _load_sim(list[nfiles-1])
+            _sim_zlast = _sim_zlast[np.argsort(_sim_zlast['iord'])]
+            _seed_iords_sorted = np.sort(_seed_iords)
+            _sidx = np.searchsorted(np.asarray(_sim_zlast['iord']), _seed_iords_sorted)
+            _sidx = np.clip(_sidx, 0, len(_sim_zlast)-1)
+            _smatch = np.asarray(_sim_zlast['iord'][_sidx]) == _seed_iords_sorted
+            _sidx = _sidx[_smatch]
+            if len(_sidx) == 0:
+                print('[Error] No seed iords found in last snapshot — check iord file')
+                sys.exit()
+            _seed_centroid = np.mean(np.array(_sim_zlast['pos'])[_sidx], axis=0)
+            p.halo_coords = _seed_centroid
+            print('| Seed centroid at z_last   = [{0:.5f},{1:.5f},{2:.5f}] kpc'.format(*_seed_centroid))
+            print('| Matched {0}/{1} seed iords in last snapshot'.format(len(_sidx), len(_seed_iords)))
+            del _sim_zlast
+        except Exception as _se:
+            print('[Error] Seed iords centroid computation failed: {0}'.format(_se))
+            sys.exit()
+        print('| ------------------------------------------------------------')
 
     # --- Tracking cache: skip the loop entirely on re-runs ---
     import pickle as _pickle
@@ -2540,6 +2572,18 @@ def decontaminate(config_file):
                     print('| Wide hull: nvertices={0}'.format(len(_hull_wide.vertices)))
                 except Exception as _e:
                     print('| [Warning] Wide hull failed: {0}'.format(_e))
+                # --- original hull (seed mode only): ALL particles within rvir*R200 at z_init ---
+                if p.seed_iords_file:
+                    try:
+                        _pts_original = np.array(sim_zinit['pos'])[region_zinit]
+                        _hull_orig = ConvexHull(_pts_original - _pts_original.mean(axis=0))
+                        _hull_orig_pts = _pts_original[_hull_orig.vertices] / _box_kpc_zinit - shift
+                        _hull_orig_pts = _hull_orig_pts + _rng.randn(*_hull_orig_pts.shape) * 1e-7
+                        np.savetxt((p.fname).strip()+'_part_original', _hull_orig_pts)
+                        print('| Original hull written to '+(p.fname).strip()+'_part_original')
+                        print('| Original hull: nvertices={0}  npart={1}'.format(len(_hull_orig.vertices), len(_pts_original)))
+                    except Exception as _e:
+                        print('| [Warning] Original hull failed: {0}'.format(_e))
             except:
                 print('[Error] Cannot write file '+(p.fname).strip())
                 sys.exit()
@@ -2938,3 +2982,119 @@ def decontaminate(config_file):
                 _tb.print_exc()
             finally:
                 pyplot.close('all')
+
+
+# ---------------------------------------------------------------------------
+# merge_regions pipeline
+# ---------------------------------------------------------------------------
+
+class config_merge_regions_obj():
+    def parse_input(self, ConfigFile):
+        config = configparser.SafeConfigParser(inline_comment_prefixes=(';', '#'))
+        config.read(ConfigFile)
+        self.region_a    = config.get('merge_regions', 'region_a')
+        self.region_b    = config.get('merge_regions', 'region_b')
+        self.fname       = config.get('merge_regions', 'fname')
+        try:
+            self.plot    = config.getboolean('merge_regions', 'plot')
+        except:
+            self.plot    = True
+        try:
+            self.noise_seed = int(config.get('merge_regions', 'noise_seed'))
+        except:
+            self.noise_seed = 12345
+
+
+def merge_regions(config_file):
+    __version()
+    p = config_merge_regions_obj()
+    print('| ------------------------------------------------------------')
+    print('| HAST - merge_regions')
+    print('| ------------------------------------------------------------')
+    try:
+        p.parse_input(config_file)
+    except Exception as _e:
+        print('[Error] {0} file specified cannot be read: {1}'.format(config_file, _e))
+        sys.exit()
+
+    # Load the two hull point files
+    try:
+        pts_a = np.loadtxt(p.region_a)
+        print('| Region A: {0}  ({1} vertices)'.format(p.region_a, len(pts_a)))
+    except Exception as _e:
+        print('[Error] Cannot read region_a {0}: {1}'.format(p.region_a, _e))
+        sys.exit()
+    try:
+        pts_b = np.loadtxt(p.region_b)
+        print('| Region B: {0}  ({1} vertices)'.format(p.region_b, len(pts_b)))
+    except Exception as _e:
+        print('[Error] Cannot read region_b {0}: {1}'.format(p.region_b, _e))
+        sys.exit()
+
+    if pts_a.ndim != 2 or pts_a.shape[1] != 3:
+        print('[Error] region_a must be an Nx3 array of 3D points')
+        sys.exit()
+    if pts_b.ndim != 2 or pts_b.shape[1] != 3:
+        print('[Error] region_b must be an Nx3 array of 3D points')
+        sys.exit()
+
+    # Merge and compute enclosing convex hull
+    pts_merged = np.vstack([pts_a, pts_b])
+    try:
+        hull_merged = ConvexHull(pts_merged - pts_merged.mean(axis=0))
+    except Exception as _e:
+        print('[Error] ConvexHull of merged points failed: {0}'.format(_e))
+        sys.exit()
+
+    _rng = np.random.RandomState(seed=p.noise_seed)
+    hull_pts = pts_merged[hull_merged.vertices]
+    hull_pts = hull_pts + _rng.randn(*hull_pts.shape) * 1e-7
+
+    try:
+        np.savetxt(p.fname.strip() + '_part_merged', hull_pts)
+        print('| Merged hull written to  {0}_part_merged'.format(p.fname.strip()))
+    except Exception as _e:
+        print('[Error] Cannot write merged hull file: {0}'.format(_e))
+        sys.exit()
+
+    print('| Vertices in A           = {0}'.format(len(pts_a)))
+    print('| Vertices in B           = {0}'.format(len(pts_b)))
+    print('| Vertices in merged hull = {0}'.format(len(hull_merged.vertices)))
+    print('| Merged hull volume      = {0:.6e}'.format(hull_merged.volume))
+    print('| ------------------------------------------------------------')
+
+    if p.plot:
+        try:
+            flatui_m = ["#3498db", "#e74c3c", "#2ecc71"]
+            cp_m = sns.color_palette(flatui_m)
+            sns.set_context('poster')
+            out = p.fname.strip() + '_merged.pdf'
+            with PdfPages(out) as pdf:
+                fig, axes = pyplot.subplots(1, 3, figsize=(18, 6), constrained_layout=True)
+                proj_labels = [('x [code]', 'y [code]', 0, 1),
+                               ('x [code]', 'z [code]', 0, 2),
+                               ('y [code]', 'z [code]', 1, 2)]
+                for ax, (xl, yl, xi, yi) in zip(axes, proj_labels):
+                    for pts, col, lbl in [(pts_a, cp_m[0], 'Region A'),
+                                          (pts_b, cp_m[1], 'Region B'),
+                                          (pts_merged[hull_merged.vertices], cp_m[2], 'Merged')]:
+                        pts2d = pts[:, [xi, yi]]
+                        if len(pts2d) >= 4:
+                            try:
+                                h2d = ConvexHull(pts2d)
+                                v = np.append(h2d.vertices, h2d.vertices[0])
+                                ax.plot(pts2d[v, 0], pts2d[v, 1], color=col,
+                                        lw=1.5, label=lbl)
+                            except Exception:
+                                pass
+                    ax.set_xlabel(xl)
+                    ax.set_ylabel(yl)
+                    ax.set_aspect('equal')
+                axes[0].legend(fontsize=10)
+                fig.suptitle('Merged Lagrangian regions\nA: {0}   B: {1}'.format(
+                    p.region_a, p.region_b))
+                pdf.savefig(fig, dpi=100)
+                pyplot.close(fig)
+            print('| Diagnostic plot written to {0}'.format(out))
+        except Exception as _ep:
+            print('| [Warning] Plot failed: {0}'.format(_ep))
