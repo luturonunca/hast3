@@ -1954,7 +1954,11 @@ def decontaminate(config_file):
         sys.exit()
 
     # Find max output number
-    max_out = int(max(glob.glob(p.output_dir+'/output_?????')).split('_')[-1])
+    _output_list_check = glob.glob(p.output_dir+'/output_?????')
+    if not _output_list_check:
+        print('[Error] No output_????? folders found in {0}'.format(p.output_dir))
+        sys.exit()
+    max_out = int(max(_output_list_check).split('_')[-1])
     list = sorted(glob.glob(p.output_dir+'/output_?????'))
     nfiles = len(list)
 
