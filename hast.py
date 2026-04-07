@@ -2507,6 +2507,31 @@ def decontaminate(config_file):
                     float(np.min(_hull_pts[:,0])), float(np.max(_hull_pts[:,0])),
                     float(np.min(_hull_pts[:,1])), float(np.max(_hull_pts[:,1])),
                     float(np.min(_hull_pts[:,2])), float(np.max(_hull_pts[:,2]))))
+                # --- rexclude hull: z_init positions of dynamic contaminants only ---
+                if len(_rexclude_region_zinit) >= 4:
+                    try:
+                        _pts_rexclude = np.array(sim_zinit['pos'])[_rexclude_region_zinit]
+                        _hull_rex = ConvexHull(_pts_rexclude - _pts_rexclude.mean(axis=0))
+                        _hull_rex_pts = _pts_rexclude[_hull_rex.vertices] / _box_kpc_zinit - shift
+                        _hull_rex_pts = _hull_rex_pts + _rng.randn(*_hull_rex_pts.shape) * 1e-7
+                        np.savetxt((p.fname).strip()+'_part_rexclude', _hull_rex_pts)
+                        print('| Rexclude hull written to '+(p.fname).strip()+'_part_rexclude')
+                        print('| Rexclude hull: nvertices={0}'.format(len(_hull_rex.vertices)))
+                    except Exception as _e:
+                        print('| [Warning] Rexclude hull failed: {0}'.format(_e))
+                else:
+                    print('| Rexclude hull skipped (fewer than 4 contaminant particles)')
+                # --- wide hull: full Lagrangian region (zoom + all coarse within rvir*R200) ---
+                try:
+                    _pts_wide = np.array(sim_zinit['pos'])[region_zinit]
+                    _hull_wide = ConvexHull(_pts_wide - _pts_wide.mean(axis=0))
+                    _hull_wide_pts = _pts_wide[_hull_wide.vertices] / _box_kpc_zinit - shift
+                    _hull_wide_pts = _hull_wide_pts + _rng.randn(*_hull_wide_pts.shape) * 1e-7
+                    np.savetxt((p.fname).strip()+'_part_wide', _hull_wide_pts)
+                    print('| Wide hull written to '+(p.fname).strip()+'_part_wide')
+                    print('| Wide hull: nvertices={0}'.format(len(_hull_wide.vertices)))
+                except Exception as _e:
+                    print('| [Warning] Wide hull failed: {0}'.format(_e))
             except:
                 print('[Error] Cannot write file '+(p.fname).strip())
                 sys.exit()
