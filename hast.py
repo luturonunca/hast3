@@ -3183,19 +3183,20 @@ def merge_regions(config_file):
                         print('| [Warning] Rotation curves page failed: {0}'.format(_e2))
 
                 # Page 3: q and lambda vs lookback time, both halos overplotted
-                if _cache_a is not None and _cache_b is not None and _params_merge is not None:
+                if _cache_a is not None and _cache_b is not None:
                     try:
+                        # Use params from output_dir if available, else flat LCDM defaults
+                        _ql_params = _params_merge if _params_merge is not None else \
+                                     {'H0': 70.0, 'omega_m': 0.3, 'omega_l': 0.7}
                         sns.set_style("darkgrid", {"axes.facecolor": ".9"})
                         fig3, ax_ql = pyplot.subplots(1, 1, figsize=(10, 8))
-                        _col_q   = [cp_m[0], cp_m[1]]
-                        _col_lam = [cp_m[0], cp_m[1]]
                         for _cache, _lbl, _cq, _cl, _ls in [
                                 (_cache_a, p.label_a, cp_m[0], cp_m[0], '-'),
                                 (_cache_b, p.label_b, cp_m[1], cp_m[1], '--')]:
                             _ql = _cache.get('_ql_data', [])
                             if not _ql:
                                 continue
-                            _t_arr   = np.array([_lookback_gyr(1.0/_a - 1.0, _params_merge)
+                            _t_arr   = np.array([_lookback_gyr(1.0/_a - 1.0, _ql_params)
                                                   for _a, _q, _l in _ql])
                             _q_arr   = np.array([_q  for _a, _q, _l in _ql])
                             _lam_arr = np.array([_l  for _a, _q, _l in _ql])
@@ -3215,7 +3216,7 @@ def merge_regions(config_file):
                         ax_ql.legend(fontsize=9)
                         # redshift top axis
                         _z_ticks = [0, 0.5, 1, 2, 3, 5, 7, 10]
-                        _t_ticks = _lookback_gyr(_z_ticks, _params_merge)
+                        _t_ticks = _lookback_gyr(_z_ticks, _ql_params)
                         _ax_z = ax_ql.twiny()
                         _ax_z.set_xlim(ax_ql.get_xlim())
                         _ax_z.set_xticks(_t_ticks)
