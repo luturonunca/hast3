@@ -2006,6 +2006,7 @@ def decontaminate(config_file):
             zinit_center    = _cache['zinit_center']
             _lagrange_iords_all = _cache['_lagrange_iords_all']
             _rexclude_iords     = _cache.get('_rexclude_iords', np.array([], dtype=np.int64))
+            _r200_iords         = _cache.get('_r200_iords',     np.array([], dtype=np.int64))
             _rc_data        = _cache['_rc_data']
             _ql_data        = _cache['_ql_data']
             _lagrange_iords      = _cache['_lagrange_iords']
@@ -2038,6 +2039,7 @@ def decontaminate(config_file):
     if not _cache_loaded:
         _lagrange_iords_all = np.array([], dtype=np.int64)
         _rexclude_iords     = np.array([], dtype=np.int64)
+        _r200_iords         = np.array([], dtype=np.int64)
         ncoarse_in_rtb_all = 0
         _rc_data          = []    # rotation curves: (redshift, r_kpc, v_circ)
         _ql_data          = []    # q/lambda: (aexp, q, lam)
@@ -2197,6 +2199,10 @@ def decontaminate(config_file):
             # Accumulate Lagrangian iords: particles within rvir*R200 + all zoom particles
             _lagrange_iords_all = np.union1d(_lagrange_iords_all, np.asarray(sim_curr['iord'][region_curr]))
             _lagrange_iords_all = np.union1d(_lagrange_iords_all, np.asarray(sim_curr['iord'][zoom_part[0]]))
+            # Accumulate coarse particles within R200 (virial sphere contaminants)
+            _coarse_r200 = virial_curr[np.asarray(sim_curr['mass'][virial_curr]) > 1.1*np.min(sim_curr['mass'])]
+            if len(_coarse_r200) > 0:
+                _r200_iords = np.union1d(_r200_iords, np.asarray(sim_curr['iord'][_coarse_r200]))
             # Collect coarse particles within rexclude: these entered the inner region and polluted dynamics
             # Only checked below rexclude_zmax (halo not yet formed at higher z)
             _z_curr = 1.0/aexp_curr - 1.0
@@ -2507,9 +2513,11 @@ def decontaminate(config_file):
                     float(np.min(_hull_pts[:,0])), float(np.max(_hull_pts[:,0])),
                     float(np.min(_hull_pts[:,1])), float(np.max(_hull_pts[:,1])),
                     float(np.min(_hull_pts[:,2])), float(np.max(_hull_pts[:,2]))))
-                # --- wide hull: full Lagrangian region (zoom + all coarse within rvir*R200) ---
+                # --- wide hull: zoom + coarse that entered R200 (virial sphere contaminants) ---
                 try:
-                    _pts_wide = np.array(sim_zinit['pos'])[region_zinit]
+                    _r200_region_zinit = np.searchsorted(sim_zinit['iord'], _r200_iords) if len(_r200_iords) > 0 else np.array([], dtype=int)
+                    _pts_wide = np.vstack([np.array(sim_zinit['pos'])[zoom_init],
+                                           np.array(sim_zinit['pos'])[_r200_region_zinit]]) if len(_r200_region_zinit) > 0 else np.array(sim_zinit['pos'])[zoom_init]
                     _hull_wide = ConvexHull(_pts_wide - _pts_wide.mean(axis=0))
                     _hull_wide_pts = _pts_wide[_hull_wide.vertices] / _box_kpc_zinit - shift
                     _hull_wide_pts = _hull_wide_pts + _rng.randn(*_hull_wide_pts.shape) * 1e-7
@@ -2548,7 +2556,7 @@ def decontaminate(config_file):
                 'n': n, 'idf': idf, 'aexp': aexp,
                 'r200_start': r200_start, 'halo_id_start': halo_id_start,
                 'ncoarse_in_rtb_all': ncoarse_in_rtb_all,
-                'zinit_center': zinit_center, '_lagrange_iords_all': _lagrange_iords_all, '_rexclude_iords': _rexclude_iords,
+                'zinit_center': zinit_center, '_lagrange_iords_all': _lagrange_iords_all, '_rexclude_iords': _rexclude_iords, '_r200_iords': _r200_iords,
                 '_rc_data': _rc_data, '_ql_data': _ql_data,
                 '_lagrange_iords': _lagrange_iords, '_central_iords': _central_iords,
                 '_lagrange_rvir_fracs': _lagrange_rvir_fracs,
