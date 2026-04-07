@@ -1898,6 +1898,18 @@ class config_decontamination_obj():
             self.rexclude_zmax = config.getfloat('decontamination','rexclude_zmax')
         except:
             self.rexclude_zmax = 6.0
+        try:
+            self.rotation_curves = config.getboolean('decontamination','rotation_curves')
+        except:
+            self.rotation_curves = True
+        try:
+            self.halo_dynamics = config.getboolean('decontamination','halo_dynamics')
+        except:
+            self.halo_dynamics = True
+        try:
+            self.lagrange_iords = config.getboolean('decontamination','lagrange_iords')
+        except:
+            self.lagrange_iords = True
 
 
 def __halo_list_tracking(output,conf):
@@ -2329,7 +2341,7 @@ def decontaminate(config_file):
                         mnm[j-1]         = 0.0
                         _companion_iords = None
                 # Rotation curves (z <= 6, r <= 100 kpc)
-                if _snap_z_pb <= 6.0:
+                if p.rotation_curves and _snap_z_pb <= 6.0:
                     _in_rc = (_r_pb > 0) & (_r_pb <= 100.0)
                     if _in_rc.sum() >= 2:
                         _srt   = np.argsort(_r_pb[_in_rc])
@@ -2341,23 +2353,25 @@ def decontaminate(config_file):
                         _dsi   = np.unique(np.linspace(0, len(_r_s)-1, _npts).astype(int))
                         _rc_data.append((_snap_z_pb, _r_s[_dsi], _vc[_dsi]))
                 # q/lambda (within R200)
-                _in_ql = _r_pb <= r200_curr
-                if _in_ql.sum() >= 50:
-                    _p_r   = _pos_pb[_in_ql]  - _cen_pb
-                    _m_r   = _mass_pb[_in_ql]
-                    _v_r   = _vel_pb[_in_ql]
-                    _com   = np.average(_p_r, axis=0, weights=_m_r)
-                    _vb    = np.average(_v_r, axis=0, weights=_m_r)
-                    _q_pb, _lam_pb = _halo_dynamics(_p_r - _com, _v_r - _vb, _m_r, r200_curr)
-                    if _q_pb is not None:
-                        _ql_data.append((aexp_curr, _q_pb, _lam_pb))
+                if p.halo_dynamics:
+                    _in_ql = _r_pb <= r200_curr
+                    if _in_ql.sum() >= 50:
+                        _p_r   = _pos_pb[_in_ql]  - _cen_pb
+                        _m_r   = _mass_pb[_in_ql]
+                        _v_r   = _vel_pb[_in_ql]
+                        _com   = np.average(_p_r, axis=0, weights=_m_r)
+                        _vb    = np.average(_v_r, axis=0, weights=_m_r)
+                        _q_pb, _lam_pb = _halo_dynamics(_p_r - _com, _v_r - _vb, _m_r, r200_curr)
+                        if _q_pb is not None:
+                            _ql_data.append((aexp_curr, _q_pb, _lam_pb))
                 # Lagrangian iord collection: closest snapshot to each integer z=0..6
-                _iord_r200_pb = _iord_pb[_r_pb <= r200_curr]
-                for _zt in range(0, 7):
-                    _dz = abs(_snap_z_pb - _zt)
-                    if _dz < _lagrange_best_dz[_zt]:
-                        _lagrange_best_dz[_zt] = _dz
-                        _lagrange_iords[_zt] = _iord_r200_pb.copy()
+                if p.lagrange_iords:
+                    _iord_r200_pb = _iord_pb[_r_pb <= r200_curr]
+                    for _zt in range(0, 7):
+                        _dz = abs(_snap_z_pb - _zt)
+                        if _dz < _lagrange_best_dz[_zt]:
+                            _lagrange_best_dz[_zt] = _dz
+                            _lagrange_iords[_zt] = _iord_r200_pb.copy()
                 # Merger tree — seeded at j==nfiles, tracked at all subsequent steps
                 if j == nfiles:
                     _central_iords = _iord_pb[_r_pb <= p.rexclude].copy()
@@ -2729,53 +2743,59 @@ def decontaminate(config_file):
                 len(rc_data), len(ql_data)))
 
             # Page 3: rotation curves colored by redshift
-            sns.set_style("ticks", {"axes.grid": False, "xtick.direction": 'in', "ytick.direction": 'in'})
-            fig, ax_rc = pyplot.subplots(1, 1, figsize=(10, 8))
-            if rc_data:
-                _cmap_rc = pyplot.cm.tab20b
-                _norm_rc = pyplot.Normalize(vmin=0, vmax=6)
-                for _snap_z, _r_kpc, _v_kms in rc_data:
-                    ax_rc.plot(_r_kpc, _v_kms, color=_cmap_rc(_norm_rc(_snap_z)),
-                               lw=0.8, alpha=0.8)
-                _sm = pyplot.cm.ScalarMappable(cmap=_cmap_rc, norm=_norm_rc)
-                _sm.set_array([])
-                pyplot.colorbar(_sm, ax=ax_rc, label='Redshift')
-            ax_rc.set_xlabel('$r$ [kpc]')
-            ax_rc.set_ylabel('$V_{\\rm circ}$ [km/s]')
-            ax_rc.set_title('Rotation curves')
-            pyplot.tight_layout()
-            pdf.savefig(fig, dpi=100)
-            pyplot.close(fig)
+            if p.rotation_curves:
+                sns.set_style("ticks", {"axes.grid": False, "xtick.direction": 'in', "ytick.direction": 'in'})
+                fig, ax_rc = pyplot.subplots(1, 1, figsize=(10, 8))
+                if rc_data:
+                    _cmap_rc = pyplot.cm.tab20b
+                    _norm_rc = pyplot.Normalize(vmin=0, vmax=6)
+                    for _snap_z, _r_kpc, _v_kms in rc_data:
+                        ax_rc.plot(_r_kpc, _v_kms, color=_cmap_rc(_norm_rc(_snap_z)),
+                                   lw=0.8, alpha=0.8)
+                    _sm = pyplot.cm.ScalarMappable(cmap=_cmap_rc, norm=_norm_rc)
+                    _sm.set_array([])
+                    pyplot.colorbar(_sm, ax=ax_rc, label='Redshift')
+                ax_rc.set_xlabel('$r$ [kpc]')
+                ax_rc.set_ylabel('$V_{\\rm circ}$ [km/s]')
+                ax_rc.set_title('Rotation curves')
+                pyplot.tight_layout()
+                pdf.savefig(fig, dpi=100)
+                pyplot.close(fig)
+            else:
+                print('| Rotation curves disabled (rotation_curves=False)')
 
             # Page 4: q and lambda on the same axes vs lookback time
-            sns.set_style("darkgrid", {"axes.facecolor": ".9"})
-            fig, ax_ql = pyplot.subplots(1, 1, figsize=(10, 8))
-            if ql_data:
-                _t_arr   = np.array([_d[0] for _d in ql_data])
-                _q_arr   = np.array([_d[1] for _d in ql_data])
-                _lam_arr = np.array([_d[2] for _d in ql_data])
-                _srt     = np.argsort(_t_arr)
-                _t_arr   = _t_arr[_srt];  _q_arr = _q_arr[_srt];  _lam_arr = _lam_arr[_srt]
-                ax_ql.plot(_t_arr, _q_arr,   color=cp[0], lw=1.5, label='$q$')
-                ax_ql.plot(_t_arr, _lam_arr, color=cp[1], lw=1.5, label='$\\lambda$')
-                ax_ql.axhline(0, color='grey', lw=0.8, ls='--', alpha=0.6)
-                _z_max_ql    = 1.0 / aexp[0] - 1.0
-                _z_ticks_ql  = [_z for _z in range(0, int(np.floor(_z_max_ql)) + 1)]
-                _t_ticks_ql  = _lookback_gyr(_z_ticks_ql, params_dyn)
-                _ax_z_ql     = ax_ql.twiny()
-                _ax_z_ql.set_xlim(ax_ql.get_xlim())
-                _ax_z_ql.set_xticks(_t_ticks_ql)
-                _ax_z_ql.set_xticklabels([str(_zz) for _zz in _z_ticks_ql])
-                _ax_z_ql.set_xlabel('Redshift')
-            ax_ql.set_ylim(-1.0, 0.6)
-            ax_ql.set_xlim(0.0, 13.0)
-            ax_ql.set_xlabel('Lookback time [Gyr]')
-            ax_ql.set_ylabel('$q$, $\\lambda$')
-            ax_ql.legend()
-            sns.despine(ax=ax_ql)
-            pyplot.tight_layout()
-            pdf.savefig(fig, dpi=100)
-            pyplot.close(fig)
+            if p.halo_dynamics:
+                sns.set_style("darkgrid", {"axes.facecolor": ".9"})
+                fig, ax_ql = pyplot.subplots(1, 1, figsize=(10, 8))
+                if ql_data:
+                    _t_arr   = np.array([_d[0] for _d in ql_data])
+                    _q_arr   = np.array([_d[1] for _d in ql_data])
+                    _lam_arr = np.array([_d[2] for _d in ql_data])
+                    _srt     = np.argsort(_t_arr)
+                    _t_arr   = _t_arr[_srt];  _q_arr = _q_arr[_srt];  _lam_arr = _lam_arr[_srt]
+                    ax_ql.plot(_t_arr, _q_arr,   color=cp[0], lw=1.5, label='$q$')
+                    ax_ql.plot(_t_arr, _lam_arr, color=cp[1], lw=1.5, label='$\\lambda$')
+                    ax_ql.axhline(0, color='grey', lw=0.8, ls='--', alpha=0.6)
+                    _z_max_ql    = 1.0 / aexp[0] - 1.0
+                    _z_ticks_ql  = [_z for _z in range(0, int(np.floor(_z_max_ql)) + 1)]
+                    _t_ticks_ql  = _lookback_gyr(_z_ticks_ql, params_dyn)
+                    _ax_z_ql     = ax_ql.twiny()
+                    _ax_z_ql.set_xlim(ax_ql.get_xlim())
+                    _ax_z_ql.set_xticks(_t_ticks_ql)
+                    _ax_z_ql.set_xticklabels([str(_zz) for _zz in _z_ticks_ql])
+                    _ax_z_ql.set_xlabel('Redshift')
+                ax_ql.set_ylim(-1.0, 0.6)
+                ax_ql.set_xlim(0.0, 13.0)
+                ax_ql.set_xlabel('Lookback time [Gyr]')
+                ax_ql.set_ylabel('$q$, $\\lambda$')
+                ax_ql.legend()
+                sns.despine(ax=ax_ql)
+                pyplot.tight_layout()
+                pdf.savefig(fig, dpi=100)
+                pyplot.close(fig)
+            else:
+                print('| Halo dynamics disabled (halo_dynamics=False)')
 
             # --- Page 5: merger tree of the tracked halo ---
             if not p.merger_tree:
