@@ -1894,6 +1894,10 @@ class config_decontamination_obj():
             self.use_cache = config.getboolean('decontamination','use_cache')
         except:
             self.use_cache = True
+        try:
+            self.rexclude_zmax = config.getfloat('decontamination','rexclude_zmax')
+        except:
+            self.rexclude_zmax = 6.0
 
 
 def __halo_list_tracking(output,conf):
@@ -2190,11 +2194,16 @@ def decontaminate(config_file):
             _lagrange_iords_all = np.union1d(_lagrange_iords_all, np.asarray(sim_curr['iord'][region_curr]))
             _lagrange_iords_all = np.union1d(_lagrange_iords_all, np.asarray(sim_curr['iord'][zoom_part[0]]))
             # Collect coarse particles within rexclude: these entered the inner region and polluted dynamics
-            _inner_curr = tree_part_curr.query_radius(hl[id,4:7].reshape(1,-1), p.rexclude)[0]
-            _coarse_inner = _inner_curr[np.asarray(sim_curr['mass'][_inner_curr]) > 1.1*np.min(sim_curr['mass'])]
-            if len(_coarse_inner) > 0:
-                _rexclude_iords = np.union1d(_rexclude_iords, np.asarray(sim_curr['iord'][_coarse_inner]))
-            print(_pfx+' Rexclude contaminants     = {0} this snap | {1} total accumulated'.format(len(_coarse_inner), len(_rexclude_iords)))
+            # Only checked below rexclude_zmax (halo not yet formed at higher z)
+            _z_curr = 1.0/aexp_curr - 1.0
+            if _z_curr <= p.rexclude_zmax:
+                _inner_curr = tree_part_curr.query_radius(hl[id,4:7].reshape(1,-1), p.rexclude)[0]
+                _coarse_inner = _inner_curr[np.asarray(sim_curr['mass'][_inner_curr]) > 1.1*np.min(sim_curr['mass'])]
+                if len(_coarse_inner) > 0:
+                    _rexclude_iords = np.union1d(_rexclude_iords, np.asarray(sim_curr['iord'][_coarse_inner]))
+                print(_pfx+' Rexclude contaminants     = {0} this snap | {1} total accumulated'.format(len(_coarse_inner), len(_rexclude_iords)))
+            else:
+                print(_pfx+' Rexclude contaminants     = skipped (z={0:.2f} > zmax={1:.1f})'.format(_z_curr, p.rexclude_zmax))
             m200 = float(np.sum(sim_curr['mass'][virial_curr].in_units('Msol')))
             mass_candidate = hl[id,10]
             coarse_in_rtb = np.where(sim_curr['mass'][region_curr]>1.1*np.min(sim_curr['mass']))
