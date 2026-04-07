@@ -1996,7 +1996,8 @@ def decontaminate(config_file):
             r200_start      = _cache['r200_start']
             halo_id_start   = _cache['halo_id_start']
             zinit_center    = _cache['zinit_center']
-            region_all_zoom = _cache['region_all_zoom']
+            _lagrange_iords_all = _cache['_lagrange_iords_all']
+            _rexclude_iords     = _cache.get('_rexclude_iords', np.array([], dtype=np.int64))
             _rc_data        = _cache['_rc_data']
             _ql_data        = _cache['_ql_data']
             _lagrange_iords      = _cache['_lagrange_iords']
@@ -2006,16 +2007,17 @@ def decontaminate(config_file):
             _mt_edges            = _cache['_mt_edges']
             _mt_unassigned_pts   = _cache.get('_mt_unassigned_pts', [])
             # Recompute sim_zinit-derived variables (fast, no snapshot load needed)
-            _ind_c              = sim_zinit['iord'][region_all_zoom]
-            region_zinit        = np.searchsorted(sim_zinit['iord'], _ind_c, side='left')
+            region_zinit        = np.searchsorted(sim_zinit['iord'], _lagrange_iords_all)
             coarse_in_rtb_init  = np.where(sim_zinit['mass'][region_zinit] > 1.1*np.min(sim_zinit['mass']))
             zoom_init           = np.where(sim_zinit['mass'] < 1.1*np.min(sim_zinit['mass']))
-            _pzc                = np.array(sim_zinit['pos']) - np.array(zinit_center)
-            _rzc                = np.linalg.norm(_pzc, axis=1)
-            allowed             = np.where((_rzc[region_zinit] < p.rexclude) |
-                                           (sim_zinit['mass'][region_zinit] < 1.1*np.min(sim_zinit['mass'])))
-            not_allowed         = np.where((_rzc[region_zinit] >= p.rexclude) &
-                                           (sim_zinit['mass'][region_zinit] > 1.1*np.min(sim_zinit['mass'])))
+            _rexclude_region_zinit = np.searchsorted(sim_zinit['iord'], _rexclude_iords) if len(_rexclude_iords) > 0 else np.array([], dtype=int)
+            _min_mass_zi        = np.min(sim_zinit['mass'])
+            allowed             = np.where(
+                                      (sim_zinit['mass'][region_zinit] < 1.1*_min_mass_zi) |
+                                      np.isin(region_zinit, _rexclude_region_zinit))
+            not_allowed         = np.where(
+                                      (sim_zinit['mass'][region_zinit] > 1.1*_min_mass_zi) &
+                                      ~np.isin(region_zinit, _rexclude_region_zinit))
             ncoarse_in_rtb_all  = _cache.get('ncoarse_in_rtb_all', len(coarse_in_rtb_init[0]))
             _cache_loaded = True
             print('| Tracking cache loaded — skipping loop')
@@ -2026,7 +2028,8 @@ def decontaminate(config_file):
 
     # Default init (overridden by cache above if loaded)
     if not _cache_loaded:
-        region_all_zoom = np.array([]).astype(int)
+        _lagrange_iords_all = np.array([], dtype=np.int64)
+        _rexclude_iords     = np.array([], dtype=np.int64)
         ncoarse_in_rtb_all = 0
         _rc_data          = []    # rotation curves: (redshift, r_kpc, v_circ)
         _ql_data          = []    # q/lambda: (aexp, q, lam)
@@ -2183,9 +2186,15 @@ def decontaminate(config_file):
             tree = KDTree(np.squeeze((sim_curr['pos'])),leaf_size=p.tree_nleaves)
             virial_curr = tree_part_curr.query_radius(hl[id,4:7].reshape(1,-1),r200_curr)[0]
             region_curr = tree_part_curr.query_radius(hl[id,4:7].reshape(1,-1),p.rvir*r200_curr)[0]
-            # Include all the zoom particles
-            region_curr_zoom = np.unique(np.append(zoom_part,region_curr))
-            region_all_zoom = np.unique(np.append(region_all_zoom,region_curr_zoom))
+            # Accumulate Lagrangian iords: particles within rvir*R200 + all zoom particles
+            _lagrange_iords_all = np.union1d(_lagrange_iords_all, np.asarray(sim_curr['iord'][region_curr]))
+            _lagrange_iords_all = np.union1d(_lagrange_iords_all, np.asarray(sim_curr['iord'][zoom_part[0]]))
+            # Collect coarse particles within rexclude: these entered the inner region and polluted dynamics
+            _inner_curr = tree_part_curr.query_radius(hl[id,4:7].reshape(1,-1), p.rexclude)[0]
+            _coarse_inner = _inner_curr[np.asarray(sim_curr['mass'][_inner_curr]) > 1.1*np.min(sim_curr['mass'])]
+            if len(_coarse_inner) > 0:
+                _rexclude_iords = np.union1d(_rexclude_iords, np.asarray(sim_curr['iord'][_coarse_inner]))
+            print(_pfx+' Rexclude contaminants     = {0} this snap | {1} total accumulated'.format(len(_coarse_inner), len(_rexclude_iords)))
             m200 = float(np.sum(sim_curr['mass'][virial_curr].in_units('Msol')))
             mass_candidate = hl[id,10]
             coarse_in_rtb = np.where(sim_curr['mass'][region_curr]>1.1*np.min(sim_curr['mass']))
@@ -2204,28 +2213,30 @@ def decontaminate(config_file):
             print(_pfx+' contamination(r<{0}*R200) = {1:.1f}%'.format(p.rvir,100*float(np.sum(sim_curr['mass'][region_curr][coarse_in_rtb]))/float(np.sum(sim_curr['mass'][region_curr]))))
             print(_pfx+' npart_zoom                = {0}'.format(len(zoom_part[0])))
             print(_pfx+' npart_tot                 = {0}'.format(len(sim_curr)))
-            # Get unique indices
-            ind_curr = sim_zinit['iord'][region_all_zoom]
-            # Trace indices back in the initial output
-            region_zinit = np.searchsorted(sim_zinit['iord'],ind_curr,side='left')
-            # Find coarse particles in the zoom region at z_init
-            coarse_in_rtb_init = np.where(sim_zinit['mass'][region_zinit]>1.1*np.min(sim_zinit['mass']))
-            # Find zoom particles at z_init
-            zoom_in_rtb_init = np.where(sim_zinit['mass'][region_zinit]<1.1*np.min(sim_zinit['mass']))
-            zoom_init = np.where(sim_zinit['mass']<1.1*np.min(sim_zinit['mass']))
+            # Trace Lagrangian iords back to z_init
+            region_zinit = np.searchsorted(sim_zinit['iord'], _lagrange_iords_all)
+            # Find coarse/zoom particles in the Lagrangian region at z_init
+            coarse_in_rtb_init = np.where(sim_zinit['mass'][region_zinit] > 1.1*np.min(sim_zinit['mass']))
+            zoom_in_rtb_init = np.where(sim_zinit['mass'][region_zinit] < 1.1*np.min(sim_zinit['mass']))
+            zoom_init = np.where(sim_zinit['mass'] < 1.1*np.min(sim_zinit['mass']))
             # Computing center of the zoom particles in z_init
             zinit_center = [
                 np.average(sim_zinit['x'][region_zinit][zoom_in_rtb_init]),
                 np.average(sim_zinit['y'][region_zinit][zoom_in_rtb_init]),
                 np.average(sim_zinit['z'][region_zinit][zoom_in_rtb_init])]
-            # Compute centered positions and radii at z_init
-            # (replaces pynbody in-place sim['pos'] centering + sim['r'])
-            pos_zinit_cen = np.array(sim_zinit['pos']) - np.array(zinit_center)
-            r_zinit = np.linalg.norm(pos_zinit_cen, axis=1)
-            allowed = np.where((r_zinit[region_zinit]<p.rexclude)|(sim_zinit['mass'][region_zinit]<1.1*np.min(sim_zinit['mass'])))
-            not_allowed = np.where((r_zinit[region_zinit]>=p.rexclude)&(sim_zinit['mass'][region_zinit]>1.1*np.min(sim_zinit['mass'])))
-            print(_pfx+' Included coarse part      = {0}'.format(len(allowed[0])))
-            print(_pfx+' Excluded coarse part      = {0}'.format(len(not_allowed[0])))
+            # z_init indices of coarse particles that passed through rexclude (dynamic contaminants)
+            _rexclude_region_zinit = np.searchsorted(sim_zinit['iord'], _rexclude_iords) if len(_rexclude_iords) > 0 else np.array([], dtype=int)
+            _min_mass_zi = np.min(sim_zinit['mass'])
+            # allowed = zoom particles + rexclude contaminants: these define the new zoom region
+            allowed = np.where(
+                (sim_zinit['mass'][region_zinit] < 1.1*_min_mass_zi) |
+                np.isin(region_zinit, _rexclude_region_zinit))
+            # not_allowed = broad coarse particles that did not pass through rexclude (diagnostic only)
+            not_allowed = np.where(
+                (sim_zinit['mass'][region_zinit] > 1.1*_min_mass_zi) &
+                ~np.isin(region_zinit, _rexclude_region_zinit))
+            print(_pfx+' Rexclude contaminants     = {0}'.format(len(_rexclude_region_zinit)))
+            print(_pfx+' Broad contaminants        = {0}'.format(len(not_allowed[0])))
             if(len(coarse_in_rtb_init)>0):
                 try:
                     # Compute centered positions and radii at curr snapshot
@@ -2470,6 +2481,19 @@ def decontaminate(config_file):
                 _hull_pts = _hull_pts + _rng.randn(*_hull_pts.shape) * 1e-7
                 np.savetxt((p.fname).strip()+'_part', _hull_pts)
                 print('| Particle list outputed to '+(p.fname).strip())
+                print('| Hull diagnostic: boxsize_kpc={0:.3f}, shift={1}'.format(_box_kpc_zinit, shift))
+                print('| Hull diagnostic: nvertices={0}'.format(len(hull.vertices)))
+                print('| Hull diagnostic: pts_allowed range x=[{0:.5f},{1:.5f}] y=[{2:.5f},{3:.5f}] z=[{4:.5f},{5:.5f}] (code units)'.format(
+                    float(np.min(_pts_allowed[:,0]/_box_kpc_zinit - shift[0])),
+                    float(np.max(_pts_allowed[:,0]/_box_kpc_zinit - shift[0])),
+                    float(np.min(_pts_allowed[:,1]/_box_kpc_zinit - shift[1])),
+                    float(np.max(_pts_allowed[:,1]/_box_kpc_zinit - shift[1])),
+                    float(np.min(_pts_allowed[:,2]/_box_kpc_zinit - shift[2])),
+                    float(np.max(_pts_allowed[:,2]/_box_kpc_zinit - shift[2]))))
+                print('| Hull diagnostic: hull_pts range x=[{0:.5f},{1:.5f}] y=[{2:.5f},{3:.5f}] z=[{4:.5f},{5:.5f}] (code units)'.format(
+                    float(np.min(_hull_pts[:,0])), float(np.max(_hull_pts[:,0])),
+                    float(np.min(_hull_pts[:,1])), float(np.max(_hull_pts[:,1])),
+                    float(np.min(_hull_pts[:,2])), float(np.max(_hull_pts[:,2]))))
             except:
                 print('[Error] Cannot write file '+(p.fname).strip())
                 sys.exit()
@@ -2500,7 +2524,7 @@ def decontaminate(config_file):
                 'n': n, 'idf': idf, 'aexp': aexp,
                 'r200_start': r200_start, 'halo_id_start': halo_id_start,
                 'ncoarse_in_rtb_all': ncoarse_in_rtb_all,
-                'zinit_center': zinit_center, 'region_all_zoom': region_all_zoom,
+                'zinit_center': zinit_center, '_lagrange_iords_all': _lagrange_iords_all, '_rexclude_iords': _rexclude_iords,
                 '_rc_data': _rc_data, '_ql_data': _ql_data,
                 '_lagrange_iords': _lagrange_iords, '_central_iords': _central_iords,
                 '_lagrange_rvir_fracs': _lagrange_rvir_fracs,
