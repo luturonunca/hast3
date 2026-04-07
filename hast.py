@@ -2824,18 +2824,20 @@ def decontaminate(config_file):
                     _z_max_ql    = 1.0 / aexp[0] - 1.0
                     _z_ticks_ql  = [_z for _z in range(0, int(np.floor(_z_max_ql)) + 1)]
                     _t_ticks_ql  = _lookback_gyr(_z_ticks_ql, params_dyn)
+                    ax_ql.set_xlim(0.0, 13.0)
                     _ax_z_ql     = ax_ql.twiny()
                     _ax_z_ql.set_xlim(ax_ql.get_xlim())
                     _ax_z_ql.set_xticks(_t_ticks_ql)
                     _ax_z_ql.set_xticklabels([str(_zz) for _zz in _z_ticks_ql])
                     _ax_z_ql.set_xlabel('Redshift')
                 ax_ql.set_ylim(-1.0, 0.6)
-                ax_ql.set_xlim(0.0, 13.0)
                 ax_ql.set_xlabel('Lookback time [Gyr]')
                 ax_ql.set_ylabel('$q$, $\\lambda$')
                 ax_ql.legend()
                 sns.despine(ax=ax_ql)
                 pyplot.tight_layout()
+                if ql_data:
+                    _ax_z_ql.set_xlim(ax_ql.get_xlim())
                 pdf.savefig(fig, dpi=100)
                 pyplot.close(fig)
             else:
@@ -3221,6 +3223,7 @@ def merge_regions(config_file):
                         _ax_z.set_xlabel('Redshift')
                         sns.despine(ax=ax_ql)
                         pyplot.tight_layout()
+                        _ax_z.set_xlim(ax_ql.get_xlim())
                         pdf.savefig(fig3, dpi=100)
                         pyplot.close(fig3)
                     except Exception as _e3:
